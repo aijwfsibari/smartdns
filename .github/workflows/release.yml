@@ -315,7 +315,7 @@ jobs:
           # mipsel
           export CC=/opt/toolchain/mipsel-unknown-linux-musl/bin/mipsel-unknown-linux-musl-gcc
           build mipsel optware
-          build mipsel openwrt nobuild
+          build mipsel openwrt nobuild ui
           build mipsel debian nobuild
           clean
           unset CC
