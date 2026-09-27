@@ -281,7 +281,6 @@ jobs:
             --filearch=mipsel-openwrt-all \
             --ver "$RELEASE_VERSION" \
             --outputdir "$GITHUB_WORKSPACE" \
-            --only-package \
             --with-ui
 
           echo
