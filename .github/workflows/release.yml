@@ -4,14 +4,14 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
   # ============================================================
-  # Target OpenWrt
+  # OpenWrt Target
   # ============================================================
   OPENWRT_VERSION: "25.12.5"
   OPENWRT_TARGET: "ramips"
   OPENWRT_SUBTARGET: "mt7621"
   OPENWRT_ARCH: "mipsel_24kc"
 
-  # Rust 内置 MIPSEL MUSL target
+  # Rust target
   RUST_TARGET: "mipsel-unknown-linux-musl"
 
 on:
@@ -46,12 +46,6 @@ jobs:
 
       # ============================================================
       # 2. Select Nightly / Stable
-      #
-      # nightly:
-      #   当前 Fork master
-      #
-      # stable:
-      #   官方 pymumu/smartdns 最新 ReleaseXX tag
       # ============================================================
       - name: Select SmartDNS Version
         id: version
@@ -83,12 +77,13 @@ jobs:
               --tags \
               upstream
 
-            LATEST_RELEASE=$(
+            LATEST_RELEASE="$(
               git tag -l 'Release*' \
                 | grep -E '^Release[0-9]+([.][0-9]+)*$' \
                 | sort -V \
-                | tail -n 1
-            )
+                | tail -n 1 \
+                || true
+            )"
 
             if [ -z "$LATEST_RELEASE" ]; then
               echo "ERROR: No official Release tag found."
@@ -160,9 +155,6 @@ jobs:
 
       # ============================================================
       # 4. Rust Nightly
-      #
-      # Rust mipsel target 没有预编译 std，
-      # 后面使用 -Z build-std。
       # ============================================================
       - name: Setup Rust Nightly
         uses: dtolnay/rust-toolchain@nightly
@@ -180,7 +172,7 @@ jobs:
             ~/.cargo/git
             plugin/smartdns-ui/target
           key: >-
-            ${{ runner.os }}-cargo-openwrt-25.12.5-mt7621-${{
+            ${{ runner.os }}-cargo-openwrt-25.12.5-mt7621-v2-${{
             hashFiles('plugin/smartdns-ui/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-openwrt-25.12.5-mt7621-
@@ -215,30 +207,35 @@ jobs:
             libgtest-dev \
             dnsperf
 
-          # --------------------------------------------------------
-          # Alpine apk.static
-          #
-          # SmartDNS build-pkg.sh 创建 APK 时需要。
-          # --------------------------------------------------------
-          APK_FILE=$(
+          echo
+          echo "=========================================="
+          echo "Installing apk.static"
+          echo "=========================================="
+
+          APK_INDEX="$(
             wget -qO- \
-              https://dl-cdn.alpinelinux.org/alpine/latest-stable/main/x86_64/ \
-              | grep -oE \
-                'apk-tools-static-[0-9][a-zA-Z0-9._-]*\.apk' \
-              | head -n 1
-          )
+              https://dl-cdn.alpinelinux.org/alpine/latest-stable/main/x86_64/
+          )"
+
+          APK_FILE="$(
+            printf '%s\n' "$APK_INDEX" \
+              | grep -oE 'apk-tools-static-[0-9][a-zA-Z0-9._-]*\.apk' \
+              | sort -u \
+              | sed -n '1p'
+          )"
 
           if [ -z "$APK_FILE" ]; then
             echo "ERROR: Cannot find apk-tools-static."
             exit 1
           fi
 
+          echo "APK tools package: $APK_FILE"
+
           wget \
             "https://dl-cdn.alpinelinux.org/alpine/latest-stable/main/x86_64/$APK_FILE" \
             -O /tmp/apk-tools-static.apk
 
           rm -rf /tmp/apk-static
-
           mkdir -p /tmp/apk-static
 
           tar \
@@ -262,13 +259,18 @@ jobs:
         id: cache-bindgen
         with:
           path: ~/.cargo/bin/bindgen
-          key: ${{ runner.os }}-bindgen-cli-nightly
+          key: ${{ runner.os }}-bindgen-cli-nightly-v2
 
       - name: Install Bindgen CLI
         if: steps.cache-bindgen.outputs.cache-hit != 'true'
+        shell: bash
         run: |
-          set -e
-          cargo install --force --locked bindgen-cli
+          set -euo pipefail
+
+          cargo install \
+            --force \
+            --locked \
+            bindgen-cli
 
       # ============================================================
       # 8. Cache OpenWrt SDK
@@ -279,18 +281,10 @@ jobs:
         with:
           path: ~/openwrt-sdk
           key: >-
-            ${{ runner.os }}-openwrt-sdk-25.12.5-ramips-mt7621-v3
+            ${{ runner.os }}-openwrt-sdk-25.12.5-ramips-mt7621-v4
 
       # ============================================================
       # 9. Download official OpenWrt SDK
-      #
-      # 不硬编码 gcc 版本。
-      #
-      # 直接读取：
-      # releases/25.12.5/targets/ramips/mt7621/
-      #
-      # 自动找到：
-      # openwrt-sdk-25.12.5-ramips-mt7621_*.tar.zst
       # ============================================================
       - name: Download OpenWrt 25.12.5 ramips mt7621 SDK
         if: steps.cache-openwrt-sdk.outputs.cache-hit != 'true'
@@ -310,7 +304,7 @@ jobs:
           echo "URL       : $BASE_URL/"
           echo "=========================================="
 
-          INDEX=$(
+          INDEX="$(
             curl \
               --fail \
               --location \
@@ -318,20 +312,20 @@ jobs:
               --silent \
               --show-error \
               "$BASE_URL/"
-          )
+          )"
 
-          SDK_FILE=$(
+          SDK_FILE="$(
             printf '%s\n' "$INDEX" \
               | grep -oE \
-                "openwrt-sdk-${OPENWRT_VERSION}-${OPENWRT_TARGET}-${OPENWRT_SUBTARGET}_[^\"]+\.tar\.(zst|xz)" \
+                "openwrt-sdk-${OPENWRT_VERSION}-${OPENWRT_TARGET}-${OPENWRT_SUBTARGET}_[^\"< ]+\.tar\.(zst|xz)" \
               | sort -u \
-              | head -n 1
-          )
+              | sed -n '1p'
+          )"
 
           if [ -z "$SDK_FILE" ]; then
             echo "ERROR: OpenWrt SDK archive not found."
             echo
-            echo "Available SDK entries:"
+            echo "SDK entries found in index:"
             printf '%s\n' "$INDEX" \
               | grep -oE 'openwrt-sdk-[^"< ]+' \
               | sort -u \
@@ -356,7 +350,6 @@ jobs:
           mkdir -p /tmp/openwrt-sdk-extract
 
           case "$SDK_FILE" in
-
             *.tar.zst)
               tar \
                 --zstd \
@@ -374,16 +367,16 @@ jobs:
               echo "ERROR: Unsupported SDK archive."
               exit 1
               ;;
-
           esac
 
-          SDK_DIR=$(
-            find /tmp/openwrt-sdk-extract \
-              -mindepth 1 \
-              -maxdepth 1 \
-              -type d \
-              | head -n 1
-          )
+          SDK_DIR=""
+
+          for DIR in /tmp/openwrt-sdk-extract/*; do
+            if [ -d "$DIR" ]; then
+              SDK_DIR="$DIR"
+              break
+            fi
+          done
 
           if [ -z "$SDK_DIR" ]; then
             echo "ERROR: SDK directory not found after extraction."
@@ -394,19 +387,13 @@ jobs:
 
           echo
           echo "=========================================="
-          echo "SDK extracted"
+          echo "SDK extracted successfully"
           echo "=========================================="
 
-          ls -la "$HOME/openwrt-sdk" | head -50
+          ls -la "$HOME/openwrt-sdk"
 
       # ============================================================
       # 10. Locate official OpenWrt toolchain
-      #
-      # OpenWrt SDK 中自动找：
-      #
-      # staging_dir/toolchain-mipsel_24kc_*/
-      #
-      # 然后自动获取真正的 GCC prefix。
       # ============================================================
       - name: Locate OpenWrt Toolchain
         id: toolchain
@@ -420,84 +407,111 @@ jobs:
           echo "Searching OpenWrt toolchain"
           echo "=========================================="
 
-          find "$SDK/staging_dir" \
-            -maxdepth 2 \
-            -type d \
-            -name 'toolchain-*' \
-            -print
+          if [ ! -d "$SDK/staging_dir" ]; then
+            echo "ERROR: staging_dir not found."
+            exit 1
+          fi
 
-          TOOLCHAIN_DIR=$(
-            find "$SDK/staging_dir" \
-              -maxdepth 1 \
-              -type d \
-              -name 'toolchain-mipsel_24kc_*' \
-              | head -n 1
-          )
+          TOOLCHAIN_DIR=""
+
+          for DIR in "$SDK"/staging_dir/toolchain-mipsel_24kc_*; do
+            if [ -d "$DIR" ]; then
+              TOOLCHAIN_DIR="$DIR"
+              break
+            fi
+          done
 
           if [ -z "$TOOLCHAIN_DIR" ]; then
             echo "ERROR: mipsel_24kc OpenWrt toolchain not found."
+            echo
+            echo "Available staging directories:"
+            find "$SDK/staging_dir" \
+              -maxdepth 1 \
+              -type d \
+              -print
             exit 1
           fi
 
           TOOLCHAIN_BIN="$TOOLCHAIN_DIR/bin"
 
-          CC=$(
-            find "$TOOLCHAIN_BIN" \
-              -maxdepth 1 \
-              -type f \
-              -o -type l \
-              | grep -E '/mipsel-openwrt-linux-musl(gcc|-gcc)$' \
-              | head -n 1 \
-              || true
-          )
+          if [ ! -d "$TOOLCHAIN_BIN" ]; then
+            echo "ERROR: Toolchain bin directory not found:"
+            echo "$TOOLCHAIN_BIN"
+            exit 1
+          fi
+
+          echo
+          echo "Toolchain directory:"
+          echo "$TOOLCHAIN_DIR"
+
+          echo
+          echo "Toolchain executables:"
+          ls -la "$TOOLCHAIN_BIN"
+
+          CC=""
+
+          for CANDIDATE in \
+            "$TOOLCHAIN_BIN/mipsel-openwrt-linux-musl-gcc" \
+            "$TOOLCHAIN_BIN/mipsel-openwrt-linux-gcc"
+          do
+            if [ -x "$CANDIDATE" ]; then
+              CC="$CANDIDATE"
+              break
+            fi
+          done
 
           if [ -z "$CC" ]; then
-            CC=$(
+
+            while IFS= read -r CANDIDATE; do
+              BASENAME="$(basename "$CANDIDATE")"
+
+              case "$BASENAME" in
+                *gcc-[0-9]*)
+                  continue
+                  ;;
+              esac
+
+              CC="$CANDIDATE"
+              break
+
+            done < <(
               find "$TOOLCHAIN_BIN" \
                 -maxdepth 1 \
                 \( -type f -o -type l \) \
                 -name '*gcc' \
-                | grep -v gcc- \
-                | head -n 1
+                | sort
             )
+
           fi
 
           if [ -z "$CC" ]; then
             echo "ERROR: GCC not found in OpenWrt toolchain."
-            ls -la "$TOOLCHAIN_BIN"
             exit 1
           fi
 
-          CC="$(readlink -f "$CC")"
-
-          CC_BASENAME="$(basename "$CC")"
-
-          CROSS_PREFIX="${CC_BASENAME%gcc}"
-
-          # 如果 readlink 后名字发生变化，
-          # 从原始 bin 目录重新寻找 matching prefix。
-          if [ ! -x "${TOOLCHAIN_BIN}/${CROSS_PREFIX}gcc" ]; then
-
-            ORIGINAL_CC=$(
-              find "$TOOLCHAIN_BIN" \
-                -maxdepth 1 \
-                \( -type f -o -type l \) \
-                -name '*gcc' \
-                | grep -v 'gcc-' \
-                | head -n 1
-            )
-
-            CROSS_PREFIX="$(basename "$ORIGINAL_CC")"
-            CROSS_PREFIX="${CROSS_PREFIX%gcc}"
-
-            CC="${TOOLCHAIN_BIN}/${CROSS_PREFIX}gcc"
-          fi
+          CC_NAME="$(basename "$CC")"
+          CROSS_PREFIX="${CC_NAME%gcc}"
 
           AR="${TOOLCHAIN_BIN}/${CROSS_PREFIX}ar"
           RANLIB="${TOOLCHAIN_BIN}/${CROSS_PREFIX}ranlib"
           STRIP="${TOOLCHAIN_BIN}/${CROSS_PREFIX}strip"
           READELF="${TOOLCHAIN_BIN}/${CROSS_PREFIX}readelf"
           OBJDUMP="${TOOLCHAIN_BIN}/${CROSS_PREFIX}objdump"
+
+          for REQUIRED_TOOL in \
+            "$CC" \
+            "$AR" \
+            "$RANLIB" \
+            "$STRIP" \
+            "$READELF" \
+            "$OBJDUMP"
+          do
+            if [ ! -x "$REQUIRED_TOOL" ]; then
+              echo "ERROR: Required tool not executable:"
+              echo "$REQUIRED_TOOL"
+              exit 1
+            fi
+          done
 
           echo
           echo "=========================================="
@@ -511,6 +525,7 @@ jobs:
           echo "RANLIB        : $RANLIB"
           echo "STRIP         : $STRIP"
           echo "READELF       : $READELF"
+          echo "OBJDUMP       : $OBJDUMP"
           echo "=========================================="
 
           "$CC" --version
@@ -537,14 +552,10 @@ jobs:
       # ============================================================
       # 11. Verify OpenWrt ABI
       #
-      # 这里直接让 OpenWrt 官方 GCC 编译一个最小程序，
-      # 检查它生成的 ELF interpreter。
-      #
-      # 我们期望：
-      #
+      # Router:
       # /lib/ld-musl-mipsel-sf.so.1
       #
-      # 这正是你的 MT7621 OpenWrt 上实际存在的 loader。
+      # SDK compiler must generate the same interpreter.
       # ============================================================
       - name: Verify OpenWrt mipsel_24kc ABI
         shell: bash
@@ -573,14 +584,14 @@ jobs:
           file /tmp/openwrt-abi-test
 
           echo
+          echo "--- ELF header ---"
+
           "$OPENWRT_READELF" \
             -h \
             /tmp/openwrt-abi-test
 
           echo
-          echo "=========================================="
-          echo "Interpreter"
-          echo "=========================================="
+          echo "--- Program interpreter ---"
 
           "$OPENWRT_READELF" \
             -l \
@@ -588,27 +599,30 @@ jobs:
             | grep -i interpreter \
             || true
 
-          INTERPRETER=$(
+          INTERPRETER="$(
             "$OPENWRT_READELF" \
               -l \
               /tmp/openwrt-abi-test \
               | sed -n \
                 's/.*Requesting program interpreter: \(.*\)]/\1/p'
-          )
+          )"
 
           echo
-          echo "Detected interpreter: $INTERPRETER"
+          echo "Detected interpreter:"
+          echo "$INTERPRETER"
 
-          if [ "$INTERPRETER" != "/lib/ld-musl-mipsel-sf.so.1" ]; then
+          EXPECTED_INTERPRETER="/lib/ld-musl-mipsel-sf.so.1"
+
+          if [ "$INTERPRETER" != "$EXPECTED_INTERPRETER" ]; then
             echo
-            echo "ERROR:"
-            echo "OpenWrt SDK generated unexpected interpreter."
-            echo
+            echo "=========================================="
+            echo "ERROR: OpenWrt SDK ABI mismatch"
+            echo "=========================================="
             echo "Expected:"
-            echo "/lib/ld-musl-mipsel-sf.so.1"
+            echo "  $EXPECTED_INTERPRETER"
             echo
             echo "Actual:"
-            echo "$INTERPRETER"
+            echo "  $INTERPRETER"
             exit 1
           fi
 
@@ -616,23 +630,26 @@ jobs:
           echo "ABI check PASSED."
 
       # ============================================================
-      # 12. Find OpenWrt target sysroot
+      # 12. Locate OpenWrt Target Sysroot
       # ============================================================
       - name: Locate OpenWrt Target Sysroot
         shell: bash
         run: |
           set -euo pipefail
 
-          TARGET_DIR=$(
-            find "$OPENWRT_SDK/staging_dir" \
-              -maxdepth 1 \
-              -type d \
-              -name 'target-mipsel_24kc_musl*' \
-              | head -n 1
-          )
+          TARGET_DIR=""
+
+          for DIR in "$OPENWRT_SDK"/staging_dir/target-mipsel_24kc_musl*; do
+            if [ -d "$DIR" ]; then
+              TARGET_DIR="$DIR"
+              break
+            fi
+          done
 
           if [ -z "$TARGET_DIR" ]; then
             echo "ERROR: OpenWrt target sysroot not found."
+            echo
+            echo "Available staging directories:"
 
             find "$OPENWRT_SDK/staging_dir" \
               -maxdepth 1 \
@@ -650,14 +667,12 @@ jobs:
           echo "=========================================="
           echo "$TARGET_DIR"
 
-          ls -la "$TARGET_DIR" | head -50
+          echo
+          echo "Target sysroot top-level contents:"
+          ls -la "$TARGET_DIR"
 
       # ============================================================
-      # 13. Build OpenSSL using official OpenWrt compiler
-      #
-      # SmartDNS 当前 UI/DoH/DoT/DoQ 构建需要 OpenSSL。
-      #
-      # 这里不再用第三方 musl compiler。
+      # 13. Cache OpenSSL
       # ============================================================
       - name: Cache OpenSSL for OpenWrt MT7621
         uses: actions/cache@v5
@@ -665,8 +680,11 @@ jobs:
         with:
           path: ~/openssl-openwrt-mt7621
           key: >-
-            ${{ runner.os }}-openssl-3.5.4-openwrt-25.12.5-mt7621-v4
+            ${{ runner.os }}-openssl-3.5.4-openwrt-25.12.5-mt7621-v5
 
+      # ============================================================
+      # 14. Build OpenSSL using official OpenWrt compiler
+      # ============================================================
       - name: Build OpenSSL for OpenWrt MT7621
         if: steps.cache-openssl.outputs.cache-hit != 'true'
         shell: bash
@@ -674,6 +692,12 @@ jobs:
           set -euo pipefail
 
           OPENSSL_VERSION="3.5.4"
+
+          echo "=========================================="
+          echo "Building OpenSSL $OPENSSL_VERSION"
+          echo "=========================================="
+          echo "Compiler:"
+          echo "$OPENWRT_CC"
 
           curl \
             --fail \
@@ -700,15 +724,6 @@ jobs:
           export AR="$OPENWRT_AR"
           export RANLIB="$OPENWRT_RANLIB"
 
-          # 重要：
-          #
-          # 不再自己强制写：
-          #
-          # -mips32r2
-          # -mtune=24kc
-          # -msoft-float
-          #
-          # OpenWrt 官方 compiler/sysroot 决定 ABI。
           export CFLAGS="-Os -fPIC"
 
           ./Configure \
@@ -766,22 +781,65 @@ jobs:
 
           echo
           echo "=========================================="
-          echo "OpenSSL installed"
+          echo "Validating OpenSSL installation"
           echo "=========================================="
 
-          find "$HOME/openssl-openwrt-mt7621" \
-            -maxdepth 3 \
-            -type f \
-            | head -100
+          if [ ! -f "$HOME/openssl-openwrt-mt7621/lib/libcrypto.a" ]; then
+            echo "ERROR: libcrypto.a not found."
+            exit 1
+          fi
+
+          if [ ! -f "$HOME/openssl-openwrt-mt7621/lib/libssl.a" ]; then
+            echo "ERROR: libssl.a not found."
+            exit 1
+          fi
+
+          if [ ! -f "$HOME/openssl-openwrt-mt7621/include/openssl/ssl.h" ]; then
+            echo "ERROR: openssl/ssl.h not found."
+            exit 1
+          fi
+
+          ls -lh \
+            "$HOME/openssl-openwrt-mt7621/lib/libcrypto.a" \
+            "$HOME/openssl-openwrt-mt7621/lib/libssl.a" \
+            "$HOME/openssl-openwrt-mt7621/include/openssl/ssl.h"
+
+          echo
+          echo "OpenSSL validation PASSED."
 
       # ============================================================
-      # 14. Configure Rust linker
-      #
-      # Rust 生成代码仍使用 mipsel-unknown-linux-musl，
-      # 但最终 linker 必须是 OpenWrt 官方 GCC。
-      #
-      # 特别重要：
-      # 不再强行传入旧通用 toolchain 的 linker 参数。
+      # 15. Validate cached OpenSSL too
+      # ============================================================
+      - name: Validate OpenSSL
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=========================================="
+          echo "OpenSSL validation"
+          echo "=========================================="
+
+          REQUIRED_FILES=(
+            "$HOME/openssl-openwrt-mt7621/lib/libcrypto.a"
+            "$HOME/openssl-openwrt-mt7621/lib/libssl.a"
+            "$HOME/openssl-openwrt-mt7621/include/openssl/ssl.h"
+          )
+
+          for FILE_PATH in "${REQUIRED_FILES[@]}"; do
+            if [ ! -f "$FILE_PATH" ]; then
+              echo "ERROR: Required OpenSSL file missing:"
+              echo "$FILE_PATH"
+              exit 1
+            fi
+
+            echo "OK: $FILE_PATH"
+          done
+
+          echo
+          echo "OpenSSL ready."
+
+      # ============================================================
+      # 16. Configure Rust linker
       # ============================================================
       - name: Configure Rust for OpenWrt MT7621
         shell: bash
@@ -801,7 +859,7 @@ jobs:
           EOF
 
           echo "=========================================="
-          echo "Rust"
+          echo "Rust configuration"
           echo "=========================================="
 
           rustc --version
@@ -812,7 +870,7 @@ jobs:
           cat "$HOME/.cargo/config.toml"
 
           echo
-          echo "Rust target specification:"
+          echo "Rust target information:"
 
           rustc \
             +nightly \
@@ -824,7 +882,7 @@ jobs:
             || true
 
       # ============================================================
-      # 15. Patch smartdns-ui build-std
+      # 17. Patch SmartDNS UI for Rust build-std
       # ============================================================
       - name: Patch SmartDNS UI for Rust build-std
         shell: bash
@@ -832,6 +890,12 @@ jobs:
           set -euo pipefail
 
           MAKEFILE="plugin/smartdns-ui/Makefile"
+
+          if [ ! -f "$MAKEFILE" ]; then
+            echo "ERROR: SmartDNS UI Makefile not found:"
+            echo "$MAKEFILE"
+            exit 1
+          fi
 
           echo "Original cargo commands:"
           grep -n "cargo.*build" "$MAKEFILE" || true
@@ -858,14 +922,11 @@ jobs:
             exit 1
           fi
 
+          echo
+          echo "SmartDNS UI Makefile patch PASSED."
+
       # ============================================================
-      # 16. Build SmartDNS + Dashboard
-      #
-      # 最重要的一步：
-      #
-      # CC/AR/RANLIB/STRIP 全部来自 OpenWrt SDK。
-      #
-      # OpenSSL 也由同一个 OpenWrt GCC 编译。
+      # 18. Build SmartDNS + Dashboard
       # ============================================================
       - name: Build SmartDNS with Dashboard UI
         shell: bash
@@ -883,9 +944,9 @@ jobs:
 
           export STATIC=yes
 
-          # --------------------------------------------------------
+          # ========================================================
           # OpenSSL
-          # --------------------------------------------------------
+          # ========================================================
           export OPENSSL_ROOT_DIR="$HOME/openssl-openwrt-mt7621"
           export OPENSSL_DIR="$HOME/openssl-openwrt-mt7621"
           export OPENSSL_LIB_DIR="$HOME/openssl-openwrt-mt7621/lib"
@@ -893,11 +954,11 @@ jobs:
 
           export PKG_CONFIG_ALLOW_CROSS=1
 
-          # --------------------------------------------------------
+          # ========================================================
           # SmartDNS C flags
           #
-          # CPU/ABI 由 OpenWrt 官方 compiler 决定。
-          # --------------------------------------------------------
+          # CPU/ABI is controlled by official OpenWrt compiler.
+          # ========================================================
           export CFLAGS="-DFEATURE_CHECK_EDNS \
           -O2 \
           -g \
@@ -943,7 +1004,7 @@ jobs:
 
           echo
           echo "=========================================="
-          echo "Build output"
+          echo "SmartDNS build completed"
           echo "=========================================="
 
           find "$GITHUB_WORKSPACE" \
@@ -959,7 +1020,7 @@ jobs:
             -print
 
       # ============================================================
-      # 17. Locate built SmartDNS / UI ELF
+      # 19. Find and inspect SmartDNS ELF files
       # ============================================================
       - name: Inspect Built ELF Files
         shell: bash
@@ -985,6 +1046,8 @@ jobs:
             echo "ERROR: No SmartDNS ELF files found."
             exit 1
           fi
+
+          echo "Found ${#ELF_FILES[@]} candidate ELF files."
 
           for FILE_PATH in "${ELF_FILES[@]}"; do
 
@@ -1032,52 +1095,90 @@ jobs:
           done
 
       # ============================================================
-      # 18. Hard validation of SmartDNS interpreter
+      # 20. Validate SmartDNS loader
       #
-      # 对可执行 SmartDNS 主程序做硬检查。
+      # Critical check:
       #
-      # 如果又生成：
+      # Router has:
+      # /lib/ld-musl-mipsel-sf.so.1
       #
+      # Reject APK if SmartDNS uses:
       # /lib/ld-musl-mipsel.so.1
-      #
-      # Workflow 直接失败，
-      # 不允许上传这个 APK。
       # ============================================================
       - name: Validate SmartDNS OpenWrt Loader
         shell: bash
         run: |
           set -euo pipefail
 
-          SMARTDNS_BIN=$(
+          SMARTDNS_BIN=""
+
+          while IFS= read -r FILE_PATH; do
+
+            if [ ! -x "$FILE_PATH" ]; then
+              continue
+            fi
+
+            if file "$FILE_PATH" | grep -q 'ELF'; then
+              SMARTDNS_BIN="$FILE_PATH"
+              break
+            fi
+
+          done < <(
             find "$GITHUB_WORKSPACE" \
               -type f \
               -name smartdns \
-              -perm -111 \
-              | grep -v '/release-assets/' \
-              | head -n 1
+              -print
           )
 
           if [ -z "$SMARTDNS_BIN" ]; then
-            echo "ERROR: SmartDNS executable not found."
+            echo "ERROR: SmartDNS executable ELF not found."
             exit 1
           fi
 
-          echo "SmartDNS binary:"
+          echo "=========================================="
+          echo "SmartDNS executable"
+          echo "=========================================="
           echo "$SMARTDNS_BIN"
 
-          INTERPRETER=$(
+          file "$SMARTDNS_BIN"
+
+          echo
+          echo "ELF header:"
+          "$OPENWRT_READELF" \
+            -h \
+            "$SMARTDNS_BIN"
+
+          echo
+          echo "Program headers:"
+          "$OPENWRT_READELF" \
+            -l \
+            "$SMARTDNS_BIN"
+
+          INTERPRETER="$(
             "$OPENWRT_READELF" \
               -l \
               "$SMARTDNS_BIN" \
               | sed -n \
                 's/.*Requesting program interpreter: \(.*\)]/\1/p'
-          )
+          )"
+
+          EXPECTED_INTERPRETER="/lib/ld-musl-mipsel-sf.so.1"
 
           echo
-          echo "SmartDNS interpreter:"
-          echo "$INTERPRETER"
+          echo "=========================================="
+          echo "SmartDNS loader check"
+          echo "=========================================="
+          echo "Expected : $EXPECTED_INTERPRETER"
+          echo "Actual   : $INTERPRETER"
+          echo "=========================================="
 
-          if [ "$INTERPRETER" != "/lib/ld-musl-mipsel-sf.so.1" ]; then
+          if [ -z "$INTERPRETER" ]; then
+            echo
+            echo "ERROR: SmartDNS ELF interpreter could not be detected."
+            exit 1
+          fi
+
+          if [ "$INTERPRETER" != "$EXPECTED_INTERPRETER" ]; then
 
             echo
             echo "=========================================="
@@ -1085,7 +1186,7 @@ jobs:
             echo "=========================================="
             echo
             echo "Expected:"
-            echo "  /lib/ld-musl-mipsel-sf.so.1"
+            echo "  $EXPECTED_INTERPRETER"
             echo
             echo "Actual:"
             echo "  $INTERPRETER"
@@ -1100,7 +1201,58 @@ jobs:
           echo "SmartDNS loader validation PASSED."
 
       # ============================================================
-      # 19. Build LuCI
+      # 21. Validate MIPS ABI attributes
+      # ============================================================
+      - name: Validate SmartDNS MIPS Attributes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SMARTDNS_BIN=""
+
+          while IFS= read -r FILE_PATH; do
+
+            if [ ! -x "$FILE_PATH" ]; then
+              continue
+            fi
+
+            if file "$FILE_PATH" | grep -q 'ELF'; then
+              SMARTDNS_BIN="$FILE_PATH"
+              break
+            fi
+
+          done < <(
+            find "$GITHUB_WORKSPACE" \
+              -type f \
+              -name smartdns \
+              -print
+          )
+
+          if [ -z "$SMARTDNS_BIN" ]; then
+            echo "ERROR: SmartDNS executable not found."
+            exit 1
+          fi
+
+          echo "=========================================="
+          echo "SmartDNS MIPS ABI attributes"
+          echo "=========================================="
+
+          "$OPENWRT_READELF" \
+            -A \
+            "$SMARTDNS_BIN" \
+            || true
+
+          echo
+          echo "ELF flags:"
+          "$OPENWRT_READELF" \
+            -h \
+            "$SMARTDNS_BIN" \
+            | grep -E \
+              'Class:|Data:|Machine:|Flags:' \
+            || true
+
+      # ============================================================
+      # 22. Build LuCI
       # ============================================================
       - name: Build LuCI App APK
         shell: bash
@@ -1119,17 +1271,17 @@ jobs:
 
           echo
           echo "=========================================="
-          echo "LuCI APK"
+          echo "LuCI APK build completed"
           echo "=========================================="
 
           find "$GITHUB_WORKSPACE" \
-            -maxdepth 5 \
+            -maxdepth 6 \
             -type f \
             -name "luci-app-smartdns*.apk" \
             -print
 
       # ============================================================
-      # 20. Collect APKs
+      # 23. Collect APKs
       # ============================================================
       - name: Collect APKs
         shell: bash
@@ -1139,31 +1291,44 @@ jobs:
           rm -rf release-assets
           mkdir -p release-assets
 
-          find "$GITHUB_WORKSPACE" \
-            -type f \
-            -name "smartdns.*.mipsel_24kc-openwrt-all.apk" \
-            -exec cp -v {} release-assets/ \;
+          echo "=========================================="
+          echo "Collecting SmartDNS APK"
+          echo "=========================================="
 
-          find "$GITHUB_WORKSPACE" \
-            -type f \
-            -name "luci-app-smartdns.*.all-luci-all.apk" \
-            -exec cp -v {} release-assets/ \;
+          SMARTDNS_COUNT=0
 
-          SMARTDNS_COUNT=$(
-            find release-assets \
-              -maxdepth 1 \
+          while IFS= read -r APK_FILE; do
+            cp -v "$APK_FILE" release-assets/
+            SMARTDNS_COUNT=$((SMARTDNS_COUNT + 1))
+          done < <(
+            find "$GITHUB_WORKSPACE" \
               -type f \
               -name "smartdns.*.mipsel_24kc-openwrt-all.apk" \
-              | wc -l
+              -not -path "$GITHUB_WORKSPACE/release-assets/*" \
+              -print
           )
 
-          LUCI_COUNT=$(
-            find release-assets \
-              -maxdepth 1 \
+          echo
+          echo "=========================================="
+          echo "Collecting LuCI APK"
+          echo "=========================================="
+
+          LUCI_COUNT=0
+
+          while IFS= read -r APK_FILE; do
+            cp -v "$APK_FILE" release-assets/
+            LUCI_COUNT=$((LUCI_COUNT + 1))
+          done < <(
+            find "$GITHUB_WORKSPACE" \
               -type f \
               -name "luci-app-smartdns.*.all-luci-all.apk" \
-              | wc -l
+              -not -path "$GITHUB_WORKSPACE/release-assets/*" \
+              -print
           )
+
+          echo
+          echo "SmartDNS APK count: $SMARTDNS_COUNT"
+          echo "LuCI APK count    : $LUCI_COUNT"
 
           if [ "$SMARTDNS_COUNT" -lt 1 ]; then
             echo "ERROR: SmartDNS APK not found."
@@ -1211,7 +1376,7 @@ jobs:
           Hardware Family:
           MediaTek MT7621
 
-          CPU Family:
+          CPU:
           MIPS 1004Kc
 
           ISA:
@@ -1233,6 +1398,14 @@ jobs:
 
           Compiler:
           $OPENWRT_CC
+
+          ----------------------------------------
+
+          OpenSSL:
+          3.5.4
+
+          OpenSSL Build:
+          Official OpenWrt compiler
 
           ----------------------------------------
 
@@ -1262,10 +1435,68 @@ jobs:
           ls -lh release-assets/
 
           echo
+          echo "=========================================="
+          echo "BUILD-INFO.txt"
+          echo "=========================================="
+
           cat release-assets/BUILD-INFO.txt
 
       # ============================================================
-      # 21. Upload
+      # 24. Final validation
+      # ============================================================
+      - name: Final Package Validation
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=========================================="
+          echo "Final package validation"
+          echo "=========================================="
+
+          SMARTDNS_APK_FOUND=0
+          LUCI_APK_FOUND=0
+
+          for FILE_PATH in release-assets/*.apk; do
+
+            if [ ! -f "$FILE_PATH" ]; then
+              continue
+            fi
+
+            FILE_NAME="$(basename "$FILE_PATH")"
+
+            echo
+            echo "APK:"
+            echo "$FILE_NAME"
+
+            case "$FILE_NAME" in
+
+              smartdns.*.mipsel_24kc-openwrt-all.apk)
+                SMARTDNS_APK_FOUND=1
+                ;;
+
+              luci-app-smartdns.*.all-luci-all.apk)
+                LUCI_APK_FOUND=1
+                ;;
+
+            esac
+
+          done
+
+          if [ "$SMARTDNS_APK_FOUND" -ne 1 ]; then
+            echo "ERROR: Final SmartDNS APK missing."
+            exit 1
+          fi
+
+          if [ "$LUCI_APK_FOUND" -ne 1 ]; then
+            echo "ERROR: Final LuCI APK missing."
+            exit 1
+          fi
+
+          echo
+          echo "Final package validation PASSED."
+
+      # ============================================================
+      # 25. Upload
       # ============================================================
       - name: Upload SmartDNS + LuCI APK Artifact
         uses: actions/upload-artifact@v6
