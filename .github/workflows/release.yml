@@ -1,28 +1,149 @@
-name: Build SmartDNS MIPSEL OpenWrt APK with UI
+name: Build SmartDNS MIPSEL OpenWrt APK with UI + LuCI
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 on:
   workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build version'
+        required: true
+        default: 'nightly'
+        type: choice
+        options:
+          - nightly
+          - stable
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: Build MIPSEL OpenWrt APK + UI
+    name: Build MIPSEL OpenWrt APK + UI + LuCI
     runs-on: ubuntu-22.04
 
     steps:
       # ------------------------------------------------------------
       # 1. Checkout
+      #
+      # 先完整拉取仓库和所有 tag。
+      #
+      # nightly:
+      #   使用当前 master
+      #
+      # stable:
+      #   后面自动切换到最新 ReleaseXX tag
       # ------------------------------------------------------------
       - name: Checkout Code
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       # ------------------------------------------------------------
-      # 2. Node.js
+      # 2. 选择 Nightly / Stable 源码
+      #
+      # nightly:
+      #   使用 master 当前 HEAD
+      #
+      # stable:
+      #   自动寻找最新正式 Release tag，
+      #   例如 Release48.4，并 checkout 到该 tag
+      # ------------------------------------------------------------
+      - name: Select SmartDNS Version
+        id: version
+        shell: bash
+        run: |
+          set -e
+
+          BUILD_TYPE="${{ inputs.build_type }}"
+
+          echo "=========================================="
+          echo "Requested build type: $BUILD_TYPE"
+          echo "=========================================="
+
+          # 确保 tag 完整
+          git fetch --force --tags
+
+          if [ "$BUILD_TYPE" = "stable" ]; then
+
+            echo
+            echo "Finding latest official Release tag..."
+
+            LATEST_RELEASE=$(
+              git tag -l 'Release*' \
+              | grep -E '^Release[0-9]+([.][0-9]+)*$' \
+              | sort -V \
+              | tail -n 1
+            )
+
+            if [ -z "$LATEST_RELEASE" ]; then
+              echo "ERROR: No official Release tag found."
+              exit 1
+            fi
+
+            echo "Latest official release: $LATEST_RELEASE"
+
+            git checkout --force "$LATEST_RELEASE"
+
+            BUILD_LABEL="$LATEST_RELEASE"
+            SOURCE_DESCRIPTION="Official Stable Release $LATEST_RELEASE"
+
+          elif [ "$BUILD_TYPE" = "nightly" ]; then
+
+            # workflow 本身从 master 运行时，
+            # 当前 checkout 就是当前 fork master。
+            #
+            # 明确记录当前 HEAD，不切换到 Release tag。
+
+            BUILD_LABEL="nightly"
+            SOURCE_DESCRIPTION="Nightly build from master"
+
+          else
+
+            echo "ERROR: Unknown build type: $BUILD_TYPE"
+            exit 1
+
+          fi
+
+          PACKAGE_VERSION="$(date +"1.%Y.%m.%d-%H%M")"
+
+          GIT_COMMIT="$(git rev-parse --short=7 HEAD)"
+          GIT_COMMIT_FULL="$(git rev-parse HEAD)"
+
+          if [ "$BUILD_TYPE" = "stable" ]; then
+            SOURCE_REF="$LATEST_RELEASE"
+          else
+            SOURCE_REF="master"
+          fi
+
+          echo "BUILD_TYPE=$BUILD_TYPE" >> "$GITHUB_ENV"
+          echo "BUILD_LABEL=$BUILD_LABEL" >> "$GITHUB_ENV"
+          echo "SOURCE_DESCRIPTION=$SOURCE_DESCRIPTION" >> "$GITHUB_ENV"
+          echo "SOURCE_REF=$SOURCE_REF" >> "$GITHUB_ENV"
+          echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> "$GITHUB_ENV"
+          echo "GIT_COMMIT=$GIT_COMMIT" >> "$GITHUB_ENV"
+          echo "GIT_COMMIT_FULL=$GIT_COMMIT_FULL" >> "$GITHUB_ENV"
+
+          echo "build_type=$BUILD_TYPE" >> "$GITHUB_OUTPUT"
+          echo "build_label=$BUILD_LABEL" >> "$GITHUB_OUTPUT"
+          echo "package_version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "git_commit=$GIT_COMMIT" >> "$GITHUB_OUTPUT"
+
+          echo
+          echo "=========================================="
+          echo "SmartDNS Source Information"
+          echo "=========================================="
+          echo "Build Type      : $BUILD_TYPE"
+          echo "Build Label     : $BUILD_LABEL"
+          echo "Source          : $SOURCE_DESCRIPTION"
+          echo "Source Ref      : $SOURCE_REF"
+          echo "Package Version : $PACKAGE_VERSION"
+          echo "Git Commit      : $GIT_COMMIT"
+          echo "=========================================="
+
+      # ------------------------------------------------------------
+      # 3. Node.js
       # SmartDNS WebUI 编译需要
       # ------------------------------------------------------------
       - name: Setup Node.js
@@ -31,10 +152,10 @@ jobs:
           node-version: '20'
 
       # ------------------------------------------------------------
-      # 3. Rust Nightly + rust-src
+      # 4. Rust Nightly + rust-src
       #
       # mipsel-unknown-linux-musl 没有官方预编译标准库，
-      # 必须使用 nightly + rust-src + build-std
+      # 使用 nightly + rust-src + build-std。
       # ------------------------------------------------------------
       - name: Setup Rust Nightly
         uses: dtolnay/rust-toolchain@nightly
@@ -42,7 +163,7 @@ jobs:
           components: rust-src
 
       # ------------------------------------------------------------
-      # 4. Cargo 缓存
+      # 5. Cargo 缓存
       # ------------------------------------------------------------
       - name: Cache Cargo Dependencies
         uses: actions/cache@v5
@@ -57,7 +178,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       # ------------------------------------------------------------
-      # 5. 系统依赖
+      # 6. 系统依赖
       # ------------------------------------------------------------
       - name: Install System Dependencies
         run: |
@@ -97,7 +218,7 @@ jobs:
           apk --version
 
       # ------------------------------------------------------------
-      # 6. bindgen
+      # 7. bindgen
       # ------------------------------------------------------------
       - name: Cache Bindgen CLI
         uses: actions/cache@v5
@@ -112,7 +233,7 @@ jobs:
           cargo install --force --locked bindgen-cli
 
       # ------------------------------------------------------------
-      # 7. MIPSEL toolchain + OpenSSL 缓存
+      # 8. MIPSEL Toolchain + OpenSSL 缓存
       # ------------------------------------------------------------
       - name: Cache MIPSEL Toolchain and OpenSSL
         uses: actions/cache@v5
@@ -127,7 +248,7 @@ jobs:
           sudo ln -sfn "$HOME/toolchain" /opt/toolchain
 
       # ------------------------------------------------------------
-      # 8. 下载 MIPSEL musl toolchain
+      # 9. 下载 MIPSEL musl Toolchain
       # ------------------------------------------------------------
       - name: Setup MIPSEL Musl Cross Compiler
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
@@ -177,7 +298,7 @@ jobs:
             "$HOME/toolchain/mipsel-linux-musl-cross/bin/objdump"
 
       # ------------------------------------------------------------
-      # 9. 编译 MIPSEL OpenSSL
+      # 10. 编译 MIPSEL OpenSSL
       # ------------------------------------------------------------
       - name: Compile OpenSSL for MIPSEL
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
@@ -254,7 +375,7 @@ jobs:
           sudo make install_sw
 
       # ------------------------------------------------------------
-      # 10. 配置 Rust MIPSEL linker
+      # 11. 配置 Rust MIPSEL Linker
       # ------------------------------------------------------------
       - name: Configure Rust MIPSEL Linker
         run: |
@@ -289,13 +410,10 @@ jobs:
           cat "$HOME/.cargo/config.toml"
 
       # ------------------------------------------------------------
-      # 11. 修改 smartdns-ui Makefile
+      # 12. Patch SmartDNS UI
       #
-      # mipsel-unknown-linux-musl 没有官方预编译 core/std。
-      #
-      # 必须让真正执行 smartdns-ui 编译的 cargo build 使用：
-      #
-      # -Z build-std=std,panic_abort
+      # mipsel-unknown-linux-musl 没有预编译 core/std。
+      # 强制 cargo build 使用 build-std。
       # ------------------------------------------------------------
       - name: Patch SmartDNS UI for MIPSEL build-std
         run: |
@@ -309,7 +427,6 @@ jobs:
 
           grep -n "cargo.*build" "$MAKEFILE" || true
 
-          # 给所有 cargo build 加上 build-std
           sed -i \
             's/cargo build/cargo build -Z build-std=std,panic_abort/g' \
             "$MAKEFILE"
@@ -335,24 +452,16 @@ jobs:
           fi
 
       # ------------------------------------------------------------
-      # 12. 编译 SmartDNS
+      # 13. 编译 SmartDNS MIPSEL + Dashboard UI
       #
-      # 只构建：
-      #
-      # MIPSEL
-      # OpenWrt
-      # UI
-      # APK
-      #
-      # 注意：
-      # 不使用 --only-package，
-      # 因为必须先生成 src/smartdns。
+      # 生成：
+      # smartdns.*.mipsel-openwrt-all.apk
       # ------------------------------------------------------------
-      - name: Build SmartDNS MIPSEL OpenWrt with UI
+      - name: Build SmartDNS MIPSEL OpenWrt with Dashboard UI
         run: |
           set -e
 
-          export RELEASE_VERSION="$(date +"1.%Y.%m.%d-%H%M")"
+          export RELEASE_VERSION="$PACKAGE_VERSION"
 
           export STATIC=yes
 
@@ -375,15 +484,16 @@ jobs:
           export PATH="$(dirname "$CC"):$PATH"
 
           echo "=========================================="
-          echo "Compiler:"
+          echo "Building SmartDNS"
+          echo "=========================================="
+          echo "Build Type      : $BUILD_TYPE"
+          echo "Build Label     : $BUILD_LABEL"
+          echo "Source Ref      : $SOURCE_REF"
+          echo "Package Version : $RELEASE_VERSION"
+          echo "Git Commit      : $GIT_COMMIT"
           echo "=========================================="
 
           "$CC" --version
-
-          echo
-          echo "=========================================="
-          echo "Rust:"
-          echo "=========================================="
 
           rustc --version
           cargo --version
@@ -410,7 +520,7 @@ jobs:
 
           echo
           echo "=========================================="
-          echo "Build completed"
+          echo "SmartDNS build completed"
           echo "=========================================="
 
           find "$GITHUB_WORKSPACE" \
@@ -424,44 +534,155 @@ jobs:
             -print
 
       # ------------------------------------------------------------
-      # 13. 收集 APK
+      # 14. 编译 LuCI APP
+      #
+      # LuCI 为 all 架构。
+      #
+      # 生成：
+      # luci-app-smartdns.*.all-luci-all.apk
       # ------------------------------------------------------------
-      - name: Collect APK
+      - name: Build LuCI App APK
+        run: |
+          set -e
+
+          echo "=========================================="
+          echo "Building LuCI App"
+          echo "=========================================="
+          echo "Build Type      : $BUILD_TYPE"
+          echo "Build Label     : $BUILD_LABEL"
+          echo "Package Version : $PACKAGE_VERSION"
+          echo "=========================================="
+
+          chmod +x package/build-pkg.sh
+
+          ./package/build-pkg.sh \
+            --platform luci \
+            --arch all \
+            --filearch=all-luci-all \
+            --ver "$PACKAGE_VERSION" \
+            --outputdir "$GITHUB_WORKSPACE" \
+            --only-package
+
+          echo
+          echo "=========================================="
+          echo "LuCI build completed"
+          echo "=========================================="
+
+          find "$GITHUB_WORKSPACE" \
+            -maxdepth 4 \
+            -type f \
+            -name "luci-app-smartdns*.apk" \
+            -print
+
+      # ------------------------------------------------------------
+      # 15. 收集 APK + BUILD-INFO.txt
+      # ------------------------------------------------------------
+      - name: Collect APKs and Build Information
         run: |
           set -e
 
           mkdir -p release-assets
 
+          echo "=========================================="
+          echo "Searching SmartDNS APK..."
+          echo "=========================================="
+
           find "$GITHUB_WORKSPACE" \
             -type f \
-            -name "*.apk" \
+            -name "smartdns.*.mipsel-openwrt-all.apk" \
             -exec cp -v {} release-assets/ \;
 
           echo
           echo "=========================================="
-          echo "Generated APK files:"
+          echo "Searching LuCI APK..."
+          echo "=========================================="
+
+          find "$GITHUB_WORKSPACE" \
+            -type f \
+            -name "luci-app-smartdns.*.all-luci-all.apk" \
+            -exec cp -v {} release-assets/ \;
+
+          cat > release-assets/BUILD-INFO.txt <<EOF
+          SmartDNS MIPSEL OpenWrt Build
+          ========================================
+
+          Build Type      : $BUILD_TYPE
+          Build Label     : $BUILD_LABEL
+          Source          : $SOURCE_DESCRIPTION
+          Source Ref      : $SOURCE_REF
+
+          Package Version : $PACKAGE_VERSION
+
+          Git Commit      : $GIT_COMMIT
+          Full Git Commit : $GIT_COMMIT_FULL
+
+          Architecture    : MIPSEL
+          Package Format  : OpenWrt APK
+
+          Dashboard UI    : YES
+          LuCI APP        : YES
+
+          Rust Target     : mipsel-unknown-linux-musl
+          Rust build-std  : YES
+
+          ========================================
+          EOF
+
+          echo
+          echo "=========================================="
+          echo "BUILD INFORMATION"
+          echo "=========================================="
+
+          cat release-assets/BUILD-INFO.txt
+
+          echo
+          echo "=========================================="
+          echo "Generated files"
           echo "=========================================="
 
           ls -lh release-assets/
 
-          if ! find release-assets \
+          SMARTDNS_COUNT=$(find release-assets \
             -maxdepth 1 \
             -type f \
-            -name "*.apk" \
-            | grep -q .; then
+            -name "smartdns.*.mipsel-openwrt-all.apk" \
+            | wc -l)
 
-            echo "ERROR: No APK package was generated."
+          LUCI_COUNT=$(find release-assets \
+            -maxdepth 1 \
+            -type f \
+            -name "luci-app-smartdns.*.all-luci-all.apk" \
+            | wc -l)
+
+          echo
+          echo "SmartDNS APK count: $SMARTDNS_COUNT"
+          echo "LuCI APK count:     $LUCI_COUNT"
+
+          if [ "$SMARTDNS_COUNT" -lt 1 ]; then
+            echo "ERROR: SmartDNS MIPSEL APK was not generated."
             exit 1
+          fi
 
+          if [ "$LUCI_COUNT" -lt 1 ]; then
+            echo "ERROR: LuCI APP APK was not generated."
+            exit 1
           fi
 
       # ------------------------------------------------------------
-      # 14. 上传 APK
+      # 16. 上传 Artifact
+      #
+      # Nightly 示例：
+      #
+      # smartdns-nightly-mipsel-openwrt-ui-luci-abcdef1
+      #
+      # Stable 示例：
+      #
+      # smartdns-Release48.4-mipsel-openwrt-ui-luci-21c940e
       # ------------------------------------------------------------
-      - name: Upload APK Artifact
+      - name: Upload SmartDNS + LuCI APK Artifact
         uses: actions/upload-artifact@v6
         with:
-          name: smartdns-mipsel-openwrt-ui-apk
-          path: release-assets/*.apk
+          name: smartdns-${{ steps.version.outputs.build_label }}-mipsel-openwrt-ui-luci-${{ steps.version.outputs.git_commit }}
+          path: release-assets/*
           if-no-files-found: error
           retention-days: 30
