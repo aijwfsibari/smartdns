@@ -1,37 +1,26 @@
-name: Build SmartDNS OpenWrt mipsel_24kc APK with UI + LuCI
+name: Build SmartDNS OpenWrt MT7621 APK with UI + LuCI
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
   # ============================================================
-  # OpenWrt Target
+  # Target OpenWrt
   # ============================================================
-  OPENWRT_ARCH: mipsel_24kc
-  TARGET_CPU: 24kc
-  TARGET_ISA: mips32r2
-  RUST_TARGET: mipsel-unknown-linux-musl
+  OPENWRT_VERSION: "25.12.5"
+  OPENWRT_TARGET: "ramips"
+  OPENWRT_SUBTARGET: "mt7621"
+  OPENWRT_ARCH: "mipsel_24kc"
 
-  # OpenWrt 24kc:
-  # CPU_CFLAGS_24kc = -mips32r2 -mtune=24kc
-  #
-  # 同时使用：
-  # -msoft-float
-  # -mabi=32
-  # -mno-branch-likely
-  MIPS_CFLAGS: >-
-    -mips32r2
-    -mtune=24kc
-    -mabi=32
-    -msoft-float
-    -mno-branch-likely
+  # Rust 内置 MIPSEL MUSL target
+  RUST_TARGET: "mipsel-unknown-linux-musl"
 
 on:
   workflow_dispatch:
     inputs:
       build_type:
-        description: 'Build version'
+        description: "SmartDNS source version"
         required: true
-        default: 'nightly'
+        default: "nightly"
         type: choice
         options:
           - nightly
@@ -42,7 +31,7 @@ permissions:
 
 jobs:
   build:
-    name: Build OpenWrt mipsel_24kc + UI + LuCI
+    name: Build SmartDNS for OpenWrt 25.12.5 ramips/mt7621
     runs-on: ubuntu-22.04
 
     steps:
@@ -56,20 +45,19 @@ jobs:
           fetch-depth: 0
 
       # ============================================================
-      # 2. 选择 Nightly / Stable
+      # 2. Select Nightly / Stable
       #
       # nightly:
       #   当前 Fork master
       #
       # stable:
-      #   从 pymumu/smartdns 官方仓库获取 ReleaseXX tag
-      #   并自动选择最新稳定版
+      #   官方 pymumu/smartdns 最新 ReleaseXX tag
       # ============================================================
       - name: Select SmartDNS Version
         id: version
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           BUILD_TYPE="${{ inputs.build_type }}"
 
@@ -78,11 +66,6 @@ jobs:
           echo "=========================================="
 
           if [ "$BUILD_TYPE" = "stable" ]; then
-
-            echo
-            echo "=========================================="
-            echo "Fetching official SmartDNS release tags"
-            echo "=========================================="
 
             if git remote get-url upstream >/dev/null 2>&1; then
               git remote set-url upstream \
@@ -93,51 +76,26 @@ jobs:
             fi
 
             echo
-            echo "Official upstream:"
-            git remote get-url upstream
-
-            echo
-            echo "Fetching official tags..."
+            echo "Fetching official SmartDNS tags..."
 
             git fetch \
               --force \
               --tags \
               upstream
 
-            echo
-            echo "=========================================="
-            echo "Available official Release tags"
-            echo "=========================================="
-
-            git tag -l 'Release*' \
-              | grep -E '^Release[0-9]+([.][0-9]+)*$' \
-              | sort -V \
-              || true
-
-            echo
-            echo "=========================================="
-            echo "Finding latest stable release"
-            echo "=========================================="
-
             LATEST_RELEASE=$(
               git tag -l 'Release*' \
                 | grep -E '^Release[0-9]+([.][0-9]+)*$' \
                 | sort -V \
-                | tail -n 1 \
-                || true
+                | tail -n 1
             )
 
             if [ -z "$LATEST_RELEASE" ]; then
-              echo "ERROR: No official SmartDNS Release tag found."
+              echo "ERROR: No official Release tag found."
               exit 1
             fi
 
-            echo "Latest official release: $LATEST_RELEASE"
-
-            echo
-            echo "=========================================="
-            echo "Checking out official stable release"
-            echo "=========================================="
+            echo "Latest stable release: $LATEST_RELEASE"
 
             git checkout --force "$LATEST_RELEASE"
 
@@ -147,14 +105,9 @@ jobs:
 
           elif [ "$BUILD_TYPE" = "nightly" ]; then
 
-            echo
-            echo "=========================================="
-            echo "Using Fork master as Nightly source"
-            echo "=========================================="
-
             BUILD_LABEL="nightly"
-            SOURCE_REF="master"
-            SOURCE_DESCRIPTION="Nightly build from Fork master"
+            SOURCE_REF="$(git rev-parse --abbrev-ref HEAD)"
+            SOURCE_DESCRIPTION="Nightly build from current fork"
 
           else
 
@@ -170,7 +123,7 @@ jobs:
 
           echo
           echo "=========================================="
-          echo "Selected SmartDNS Source"
+          echo "Selected source"
           echo "=========================================="
           echo "Build Type      : $BUILD_TYPE"
           echo "Build Label     : $BUILD_LABEL"
@@ -178,21 +131,24 @@ jobs:
           echo "Source Ref      : $SOURCE_REF"
           echo "Package Version : $PACKAGE_VERSION"
           echo "Git Commit      : $GIT_COMMIT"
-          echo "Full Commit     : $GIT_COMMIT_FULL"
           echo "=========================================="
 
-          echo "BUILD_TYPE=$BUILD_TYPE" >> "$GITHUB_ENV"
-          echo "BUILD_LABEL=$BUILD_LABEL" >> "$GITHUB_ENV"
-          echo "SOURCE_DESCRIPTION=$SOURCE_DESCRIPTION" >> "$GITHUB_ENV"
-          echo "SOURCE_REF=$SOURCE_REF" >> "$GITHUB_ENV"
-          echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> "$GITHUB_ENV"
-          echo "GIT_COMMIT=$GIT_COMMIT" >> "$GITHUB_ENV"
-          echo "GIT_COMMIT_FULL=$GIT_COMMIT_FULL" >> "$GITHUB_ENV"
+          {
+            echo "BUILD_TYPE=$BUILD_TYPE"
+            echo "BUILD_LABEL=$BUILD_LABEL"
+            echo "SOURCE_DESCRIPTION=$SOURCE_DESCRIPTION"
+            echo "SOURCE_REF=$SOURCE_REF"
+            echo "PACKAGE_VERSION=$PACKAGE_VERSION"
+            echo "GIT_COMMIT=$GIT_COMMIT"
+            echo "GIT_COMMIT_FULL=$GIT_COMMIT_FULL"
+          } >> "$GITHUB_ENV"
 
-          echo "build_type=$BUILD_TYPE" >> "$GITHUB_OUTPUT"
-          echo "build_label=$BUILD_LABEL" >> "$GITHUB_OUTPUT"
-          echo "package_version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
-          echo "git_commit=$GIT_COMMIT" >> "$GITHUB_OUTPUT"
+          {
+            echo "build_type=$BUILD_TYPE"
+            echo "build_label=$BUILD_LABEL"
+            echo "package_version=$PACKAGE_VERSION"
+            echo "git_commit=$GIT_COMMIT"
+          } >> "$GITHUB_OUTPUT"
 
       # ============================================================
       # 3. Node.js
@@ -200,13 +156,13 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: "20"
 
       # ============================================================
       # 4. Rust Nightly
       #
-      # mipsel-unknown-linux-musl 没有预编译 std，
-      # 使用 rust-src + build-std。
+      # Rust mipsel target 没有预编译 std，
+      # 后面使用 -Z build-std。
       # ============================================================
       - name: Setup Rust Nightly
         uses: dtolnay/rust-toolchain@nightly
@@ -214,7 +170,7 @@ jobs:
           components: rust-src
 
       # ============================================================
-      # 5. Cargo Cache
+      # 5. Cargo cache
       # ============================================================
       - name: Cache Cargo Dependencies
         uses: actions/cache@v5
@@ -223,284 +179,542 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             plugin/smartdns-ui/target
-          key: ${{ runner.os }}-cargo-mipsel24kc-nightly-${{ hashFiles('plugin/smartdns-ui/Cargo.lock') }}
+          key: >-
+            ${{ runner.os }}-cargo-openwrt-25.12.5-mt7621-${{
+            hashFiles('plugin/smartdns-ui/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-mipsel24kc-nightly-
+            ${{ runner.os }}-cargo-openwrt-25.12.5-mt7621-
             ${{ runner.os }}-cargo-
 
       # ============================================================
-      # 6. System Dependencies
+      # 6. System dependencies
       # ============================================================
       - name: Install System Dependencies
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           sudo apt-get update
 
           sudo apt-get install -y \
-            libgtest-dev \
-            dnsperf \
+            build-essential \
+            binutils \
+            file \
             jq \
             wget \
-            unzip \
+            curl \
+            ca-certificates \
+            zstd \
+            xz-utils \
             tar \
+            unzip \
             make \
             gcc \
-            binutils
+            g++ \
+            pkg-config \
+            libgtest-dev \
+            dnsperf
 
           # --------------------------------------------------------
-          # 安装 Alpine apk.static
+          # Alpine apk.static
+          #
+          # SmartDNS build-pkg.sh 创建 APK 时需要。
           # --------------------------------------------------------
+          APK_FILE=$(
+            wget -qO- \
+              https://dl-cdn.alpinelinux.org/alpine/latest-stable/main/x86_64/ \
+              | grep -oE \
+                'apk-tools-static-[0-9][a-zA-Z0-9._-]*\.apk' \
+              | head -n 1
+          )
 
-          APK_FILE=$(wget -qO- \
-            https://dl-cdn.alpinelinux.org/alpine/latest-stable/main/x86_64/ \
-            | grep -oE 'apk-tools-static-[0-9][a-zA-Z0-9.-]*\.apk' \
-            | head -n 1)
+          if [ -z "$APK_FILE" ]; then
+            echo "ERROR: Cannot find apk-tools-static."
+            exit 1
+          fi
 
           wget \
             "https://dl-cdn.alpinelinux.org/alpine/latest-stable/main/x86_64/$APK_FILE" \
             -O /tmp/apk-tools-static.apk
 
-          tar -zxf \
-            /tmp/apk-tools-static.apk \
-            -C /tmp
+          rm -rf /tmp/apk-static
+
+          mkdir -p /tmp/apk-static
+
+          tar \
+            -zxf /tmp/apk-tools-static.apk \
+            -C /tmp/apk-static
 
           sudo cp \
-            /tmp/sbin/apk.static \
+            /tmp/apk-static/sbin/apk.static \
             /usr/local/bin/apk
 
-          sudo cp \
-            /tmp/sbin/apk.static \
-            /usr/bin/apk
-
           sudo chmod +x \
-            /usr/local/bin/apk \
-            /usr/bin/apk
+            /usr/local/bin/apk
 
           apk --version
 
       # ============================================================
-      # 7. Bindgen
+      # 7. Bindgen CLI
       # ============================================================
       - name: Cache Bindgen CLI
         uses: actions/cache@v5
         id: cache-bindgen
         with:
           path: ~/.cargo/bin/bindgen
-          key: ${{ runner.os }}-bindgen-cli-nightly-0.69.5
+          key: ${{ runner.os }}-bindgen-cli-nightly
 
       - name: Install Bindgen CLI
         if: steps.cache-bindgen.outputs.cache-hit != 'true'
         run: |
+          set -e
           cargo install --force --locked bindgen-cli
 
       # ============================================================
-      # 8. MIPSEL Toolchain + OpenSSL Cache
-      #
-      # 注意：
-      # 这里升级 cache key。
-      #
-      # 原来的 OpenSSL 没有按 24kc 参数编译，
-      # 绝对不能复用旧缓存。
+      # 8. Cache OpenWrt SDK
       # ============================================================
-      - name: Cache MIPSEL Toolchain and OpenSSL
+      - name: Cache OpenWrt SDK
         uses: actions/cache@v5
-        id: cache-toolchain
+        id: cache-openwrt-sdk
         with:
-          path: ~/toolchain
-          key: ${{ runner.os }}-mipsel24kc-mips32r2-softfloat-openssl-3.5.4-v2
+          path: ~/openwrt-sdk
+          key: >-
+            ${{ runner.os }}-openwrt-sdk-25.12.5-ramips-mt7621-v3
 
       # ============================================================
-      # 9. Toolchain Directory
+      # 9. Download official OpenWrt SDK
+      #
+      # 不硬编码 gcc 版本。
+      #
+      # 直接读取：
+      # releases/25.12.5/targets/ramips/mt7621/
+      #
+      # 自动找到：
+      # openwrt-sdk-25.12.5-ramips-mt7621_*.tar.zst
       # ============================================================
-      - name: Link Toolchain Directory
+      - name: Download OpenWrt 25.12.5 ramips mt7621 SDK
+        if: steps.cache-openwrt-sdk.outputs.cache-hit != 'true'
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          sudo mkdir -p /opt
-
-          sudo ln -sfn \
-            "$HOME/toolchain" \
-            /opt/toolchain
-
-      # ============================================================
-      # 10. MIPSEL musl Cross Compiler
-      # ============================================================
-      - name: Setup MIPSEL Musl Cross Compiler
-        if: steps.cache-toolchain.outputs.cache-hit != 'true'
-        run: |
-          set -e
-
-          mkdir -p "$HOME/toolchain"
-
-          URL="https://github.com/OpenListTeam/musl-compilers/releases/download/2025-06-12/mipsel-linux-musl-cross.tgz"
-
-          wget "$URL" \
-            -O /tmp/mipsel-toolchain.tgz
-
-          gzip -t /tmp/mipsel-toolchain.tgz
-
-          tar \
-            -C "$HOME/toolchain" \
-            -xzf /tmp/mipsel-toolchain.tgz
-
-          cd "$HOME/toolchain"
-
-          ln -sfn \
-            mipsel-linux-musl-cross \
-            mipsel-unknown-linux-musl
-
-          PREFIX_FROM="mipsel-linux-musl"
-          PREFIX_TO="mipsel-unknown-linux-musl"
-
-          for f in \
-            "$HOME/toolchain/mipsel-linux-musl-cross/bin/${PREFIX_FROM}"-*; do
-
-            if [ -f "$f" ]; then
-
-              base=$(basename "$f")
-
-              new_base=$(echo "$base" \
-                | sed "s/$PREFIX_FROM/$PREFIX_TO/")
-
-              ln -sfn "$f" \
-                "$HOME/toolchain/mipsel-linux-musl-cross/bin/$new_base"
-
-            fi
-          done
-
-          ln -sfn \
-            "${PREFIX_FROM}-objdump" \
-            "$HOME/toolchain/mipsel-linux-musl-cross/bin/objdump"
-
-      # ============================================================
-      # 11. Verify Toolchain
-      # ============================================================
-      - name: Verify MIPSEL Toolchain
-        run: |
-          set -e
-
-          CC="/opt/toolchain/mipsel-unknown-linux-musl/bin/mipsel-unknown-linux-musl-gcc"
+          BASE_URL="https://downloads.openwrt.org/releases/${OPENWRT_VERSION}/targets/${OPENWRT_TARGET}/${OPENWRT_SUBTARGET}"
 
           echo "=========================================="
-          echo "Cross compiler"
+          echo "OpenWrt SDK"
+          echo "=========================================="
+          echo "Version   : $OPENWRT_VERSION"
+          echo "Target    : $OPENWRT_TARGET"
+          echo "Subtarget : $OPENWRT_SUBTARGET"
+          echo "Arch      : $OPENWRT_ARCH"
+          echo "URL       : $BASE_URL/"
+          echo "=========================================="
+
+          INDEX=$(
+            curl \
+              --fail \
+              --location \
+              --retry 5 \
+              --silent \
+              --show-error \
+              "$BASE_URL/"
+          )
+
+          SDK_FILE=$(
+            printf '%s\n' "$INDEX" \
+              | grep -oE \
+                "openwrt-sdk-${OPENWRT_VERSION}-${OPENWRT_TARGET}-${OPENWRT_SUBTARGET}_[^\"]+\.tar\.(zst|xz)" \
+              | sort -u \
+              | head -n 1
+          )
+
+          if [ -z "$SDK_FILE" ]; then
+            echo "ERROR: OpenWrt SDK archive not found."
+            echo
+            echo "Available SDK entries:"
+            printf '%s\n' "$INDEX" \
+              | grep -oE 'openwrt-sdk-[^"< ]+' \
+              | sort -u \
+              || true
+            exit 1
+          fi
+
+          echo
+          echo "SDK archive:"
+          echo "$SDK_FILE"
+
+          curl \
+            --fail \
+            --location \
+            --retry 5 \
+            --output "/tmp/$SDK_FILE" \
+            "$BASE_URL/$SDK_FILE"
+
+          rm -rf "$HOME/openwrt-sdk"
+          rm -rf /tmp/openwrt-sdk-extract
+
+          mkdir -p /tmp/openwrt-sdk-extract
+
+          case "$SDK_FILE" in
+
+            *.tar.zst)
+              tar \
+                --zstd \
+                -xf "/tmp/$SDK_FILE" \
+                -C /tmp/openwrt-sdk-extract
+              ;;
+
+            *.tar.xz)
+              tar \
+                -xJf "/tmp/$SDK_FILE" \
+                -C /tmp/openwrt-sdk-extract
+              ;;
+
+            *)
+              echo "ERROR: Unsupported SDK archive."
+              exit 1
+              ;;
+
+          esac
+
+          SDK_DIR=$(
+            find /tmp/openwrt-sdk-extract \
+              -mindepth 1 \
+              -maxdepth 1 \
+              -type d \
+              | head -n 1
+          )
+
+          if [ -z "$SDK_DIR" ]; then
+            echo "ERROR: SDK directory not found after extraction."
+            exit 1
+          fi
+
+          mv "$SDK_DIR" "$HOME/openwrt-sdk"
+
+          echo
+          echo "=========================================="
+          echo "SDK extracted"
+          echo "=========================================="
+
+          ls -la "$HOME/openwrt-sdk" | head -50
+
+      # ============================================================
+      # 10. Locate official OpenWrt toolchain
+      #
+      # OpenWrt SDK 中自动找：
+      #
+      # staging_dir/toolchain-mipsel_24kc_*/
+      #
+      # 然后自动获取真正的 GCC prefix。
+      # ============================================================
+      - name: Locate OpenWrt Toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDK="$HOME/openwrt-sdk"
+
+          echo "=========================================="
+          echo "Searching OpenWrt toolchain"
+          echo "=========================================="
+
+          find "$SDK/staging_dir" \
+            -maxdepth 2 \
+            -type d \
+            -name 'toolchain-*' \
+            -print
+
+          TOOLCHAIN_DIR=$(
+            find "$SDK/staging_dir" \
+              -maxdepth 1 \
+              -type d \
+              -name 'toolchain-mipsel_24kc_*' \
+              | head -n 1
+          )
+
+          if [ -z "$TOOLCHAIN_DIR" ]; then
+            echo "ERROR: mipsel_24kc OpenWrt toolchain not found."
+            exit 1
+          fi
+
+          TOOLCHAIN_BIN="$TOOLCHAIN_DIR/bin"
+
+          CC=$(
+            find "$TOOLCHAIN_BIN" \
+              -maxdepth 1 \
+              -type f \
+              -o -type l \
+              | grep -E '/mipsel-openwrt-linux-musl(gcc|-gcc)$' \
+              | head -n 1 \
+              || true
+          )
+
+          if [ -z "$CC" ]; then
+            CC=$(
+              find "$TOOLCHAIN_BIN" \
+                -maxdepth 1 \
+                \( -type f -o -type l \) \
+                -name '*gcc' \
+                | grep -v gcc- \
+                | head -n 1
+            )
+          fi
+
+          if [ -z "$CC" ]; then
+            echo "ERROR: GCC not found in OpenWrt toolchain."
+            ls -la "$TOOLCHAIN_BIN"
+            exit 1
+          fi
+
+          CC="$(readlink -f "$CC")"
+
+          CC_BASENAME="$(basename "$CC")"
+
+          CROSS_PREFIX="${CC_BASENAME%gcc}"
+
+          # 如果 readlink 后名字发生变化，
+          # 从原始 bin 目录重新寻找 matching prefix。
+          if [ ! -x "${TOOLCHAIN_BIN}/${CROSS_PREFIX}gcc" ]; then
+
+            ORIGINAL_CC=$(
+              find "$TOOLCHAIN_BIN" \
+                -maxdepth 1 \
+                \( -type f -o -type l \) \
+                -name '*gcc' \
+                | grep -v 'gcc-' \
+                | head -n 1
+            )
+
+            CROSS_PREFIX="$(basename "$ORIGINAL_CC")"
+            CROSS_PREFIX="${CROSS_PREFIX%gcc}"
+
+            CC="${TOOLCHAIN_BIN}/${CROSS_PREFIX}gcc"
+          fi
+
+          AR="${TOOLCHAIN_BIN}/${CROSS_PREFIX}ar"
+          RANLIB="${TOOLCHAIN_BIN}/${CROSS_PREFIX}ranlib"
+          STRIP="${TOOLCHAIN_BIN}/${CROSS_PREFIX}strip"
+          READELF="${TOOLCHAIN_BIN}/${CROSS_PREFIX}readelf"
+          OBJDUMP="${TOOLCHAIN_BIN}/${CROSS_PREFIX}objdump"
+
+          echo
+          echo "=========================================="
+          echo "Official OpenWrt Toolchain"
+          echo "=========================================="
+          echo "TOOLCHAIN_DIR : $TOOLCHAIN_DIR"
+          echo "TOOLCHAIN_BIN : $TOOLCHAIN_BIN"
+          echo "CROSS_PREFIX  : $CROSS_PREFIX"
+          echo "CC            : $CC"
+          echo "AR            : $AR"
+          echo "RANLIB        : $RANLIB"
+          echo "STRIP         : $STRIP"
+          echo "READELF       : $READELF"
           echo "=========================================="
 
           "$CC" --version
 
-          echo
-          echo "=========================================="
-          echo "Target information"
-          echo "=========================================="
+          {
+            echo "OPENWRT_SDK=$SDK"
+            echo "TOOLCHAIN_DIR=$TOOLCHAIN_DIR"
+            echo "TOOLCHAIN_BIN=$TOOLCHAIN_BIN"
+            echo "CROSS_PREFIX=$CROSS_PREFIX"
+            echo "OPENWRT_CC=$CC"
+            echo "OPENWRT_AR=$AR"
+            echo "OPENWRT_RANLIB=$RANLIB"
+            echo "OPENWRT_STRIP=$STRIP"
+            echo "OPENWRT_READELF=$READELF"
+            echo "OPENWRT_OBJDUMP=$OBJDUMP"
+          } >> "$GITHUB_ENV"
 
-          echo "OpenWrt arch : $OPENWRT_ARCH"
-          echo "CPU          : $TARGET_CPU"
-          echo "ISA          : $TARGET_ISA"
-          echo "Endian       : little"
-          echo "ABI          : o32"
-          echo "Float ABI    : soft-float"
-          echo "CFLAGS       : $MIPS_CFLAGS"
+          {
+            echo "toolchain_dir=$TOOLCHAIN_DIR"
+            echo "toolchain_bin=$TOOLCHAIN_BIN"
+            echo "cc=$CC"
+          } >> "$GITHUB_OUTPUT"
 
-          echo
-          echo "=========================================="
-          echo "Compiler predefined macros"
-          echo "=========================================="
+      # ============================================================
+      # 11. Verify OpenWrt ABI
+      #
+      # 这里直接让 OpenWrt 官方 GCC 编译一个最小程序，
+      # 检查它生成的 ELF interpreter。
+      #
+      # 我们期望：
+      #
+      # /lib/ld-musl-mipsel-sf.so.1
+      #
+      # 这正是你的 MT7621 OpenWrt 上实际存在的 loader。
+      # ============================================================
+      - name: Verify OpenWrt mipsel_24kc ABI
+        shell: bash
+        run: |
+          set -euo pipefail
 
-          echo | "$CC" \
-            $MIPS_CFLAGS \
-            -dM \
-            -E \
-            - \
-            | grep -E \
-              '__MIPSEL|__mips|__mips_isa_rev|__mips_soft_float|_MIPS_SIM' \
-            | sort \
-            || true
+          cat > /tmp/openwrt-abi-test.c <<'EOF'
+          #include <stdio.h>
 
-          echo
-          echo "=========================================="
-          echo "Compile test"
-          echo "=========================================="
-
-          cat > /tmp/mips-test.c <<'EOF'
           int main(void)
           {
+              puts("OpenWrt ABI test");
               return 0;
           }
           EOF
 
-          "$CC" \
-            $MIPS_CFLAGS \
-            /tmp/mips-test.c \
-            -o /tmp/mips-test
+          "$OPENWRT_CC" \
+            -Os \
+            /tmp/openwrt-abi-test.c \
+            -o /tmp/openwrt-abi-test
 
-          TOOLCHAIN_OBJDUMP="/opt/toolchain/mipsel-unknown-linux-musl/bin/mipsel-unknown-linux-musl-objdump"
+          echo "=========================================="
+          echo "OpenWrt ABI test ELF"
+          echo "=========================================="
 
-          "$TOOLCHAIN_OBJDUMP" \
-            -f \
-            /tmp/mips-test
+          file /tmp/openwrt-abi-test
 
-          "$TOOLCHAIN_OBJDUMP" \
-            -p \
-            /tmp/mips-test \
-            | head -n 80 \
+          echo
+          "$OPENWRT_READELF" \
+            -h \
+            /tmp/openwrt-abi-test
+
+          echo
+          echo "=========================================="
+          echo "Interpreter"
+          echo "=========================================="
+
+          "$OPENWRT_READELF" \
+            -l \
+            /tmp/openwrt-abi-test \
+            | grep -i interpreter \
             || true
 
+          INTERPRETER=$(
+            "$OPENWRT_READELF" \
+              -l \
+              /tmp/openwrt-abi-test \
+              | sed -n \
+                's/.*Requesting program interpreter: \(.*\)]/\1/p'
+          )
+
+          echo
+          echo "Detected interpreter: $INTERPRETER"
+
+          if [ "$INTERPRETER" != "/lib/ld-musl-mipsel-sf.so.1" ]; then
+            echo
+            echo "ERROR:"
+            echo "OpenWrt SDK generated unexpected interpreter."
+            echo
+            echo "Expected:"
+            echo "/lib/ld-musl-mipsel-sf.so.1"
+            echo
+            echo "Actual:"
+            echo "$INTERPRETER"
+            exit 1
+          fi
+
+          echo
+          echo "ABI check PASSED."
+
       # ============================================================
-      # 12. Compile OpenSSL for OpenWrt mipsel_24kc
-      #
-      # 关键：
-      #
-      # CFLAGS:
-      #   -mips32r2
-      #   -mtune=24kc
-      #   -mabi=32
-      #   -msoft-float
-      #   -mno-branch-likely
-      #
+      # 12. Find OpenWrt target sysroot
       # ============================================================
-      - name: Compile OpenSSL for OpenWrt mipsel_24kc
-        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+      - name: Locate OpenWrt Target Sysroot
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          wget -q \
-            https://github.com/openssl/openssl/releases/download/openssl-3.5.4/openssl-3.5.4.tar.gz \
-            -O /tmp/openssl-3.5.4.tar.gz
+          TARGET_DIR=$(
+            find "$OPENWRT_SDK/staging_dir" \
+              -maxdepth 1 \
+              -type d \
+              -name 'target-mipsel_24kc_musl*' \
+              | head -n 1
+          )
 
-          rm -rf /tmp/build-openssl
+          if [ -z "$TARGET_DIR" ]; then
+            echo "ERROR: OpenWrt target sysroot not found."
 
-          mkdir -p /tmp/build-openssl
+            find "$OPENWRT_SDK/staging_dir" \
+              -maxdepth 1 \
+              -type d \
+              -print
 
-          cd /tmp/build-openssl
+            exit 1
+          fi
 
-          tar -xzf \
-            /tmp/openssl-3.5.4.tar.gz
-
-          cd openssl-3.5.4
-
-          CC="/opt/toolchain/mipsel-unknown-linux-musl/bin/mipsel-unknown-linux-musl-gcc"
-
-          SYSROOT=$($CC --print-sysroot)
+          echo "OPENWRT_TARGET_DIR=$TARGET_DIR" \
+            >> "$GITHUB_ENV"
 
           echo "=========================================="
-          echo "Building OpenSSL"
+          echo "Target sysroot"
           echo "=========================================="
-          echo "Target  : OpenWrt mipsel_24kc"
-          echo "CPU     : 24kc"
-          echo "ISA     : MIPS32r2"
-          echo "Endian  : little"
-          echo "ABI     : o32"
-          echo "Float   : soft"
-          echo "SYSROOT : $SYSROOT"
-          echo "CFLAGS  : $MIPS_CFLAGS -Os"
-          echo "=========================================="
+          echo "$TARGET_DIR"
 
-          export CC="$CC"
-          export CFLAGS="$MIPS_CFLAGS -Os"
+          ls -la "$TARGET_DIR" | head -50
+
+      # ============================================================
+      # 13. Build OpenSSL using official OpenWrt compiler
+      #
+      # SmartDNS 当前 UI/DoH/DoT/DoQ 构建需要 OpenSSL。
+      #
+      # 这里不再用第三方 musl compiler。
+      # ============================================================
+      - name: Cache OpenSSL for OpenWrt MT7621
+        uses: actions/cache@v5
+        id: cache-openssl
+        with:
+          path: ~/openssl-openwrt-mt7621
+          key: >-
+            ${{ runner.os }}-openssl-3.5.4-openwrt-25.12.5-mt7621-v4
+
+      - name: Build OpenSSL for OpenWrt MT7621
+        if: steps.cache-openssl.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          OPENSSL_VERSION="3.5.4"
+
+          curl \
+            --fail \
+            --location \
+            --retry 5 \
+            "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz" \
+            -o "/tmp/openssl-${OPENSSL_VERSION}.tar.gz"
+
+          rm -rf /tmp/openssl-build
+          rm -rf "$HOME/openssl-openwrt-mt7621"
+
+          mkdir -p /tmp/openssl-build
+          mkdir -p "$HOME/openssl-openwrt-mt7621"
+
+          tar \
+            -xzf "/tmp/openssl-${OPENSSL_VERSION}.tar.gz" \
+            -C /tmp/openssl-build
+
+          cd "/tmp/openssl-build/openssl-${OPENSSL_VERSION}"
+
+          export PATH="$TOOLCHAIN_BIN:$PATH"
+
+          export CC="$OPENWRT_CC"
+          export AR="$OPENWRT_AR"
+          export RANLIB="$OPENWRT_RANLIB"
+
+          # 重要：
+          #
+          # 不再自己强制写：
+          #
+          # -mips32r2
+          # -mtune=24kc
+          # -msoft-float
+          #
+          # OpenWrt 官方 compiler/sysroot 决定 ABI。
+          export CFLAGS="-Os -fPIC"
 
           ./Configure \
             linux-generic32 \
-            --prefix="$SYSROOT" \
+            --prefix="$HOME/openssl-openwrt-mt7621" \
+            --openssldir="$HOME/openssl-openwrt-mt7621/ssl" \
             no-shared \
             no-tests \
             no-apps \
@@ -548,38 +762,41 @@ jobs:
 
           make -j"$(nproc)"
 
-          sudo make install_sw
+          make install_sw
+
+          echo
+          echo "=========================================="
+          echo "OpenSSL installed"
+          echo "=========================================="
+
+          find "$HOME/openssl-openwrt-mt7621" \
+            -maxdepth 3 \
+            -type f \
+            | head -100
 
       # ============================================================
-      # 13. Configure Rust
+      # 14. Configure Rust linker
       #
-      # Rust 内置 mipsel-unknown-linux-musl：
+      # Rust 生成代码仍使用 mipsel-unknown-linux-musl，
+      # 但最终 linker 必须是 OpenWrt 官方 GCC。
       #
-      # CPU      = mips32r2
-      # Endian   = little
-      # ABI      = O32
-      # features = +mips32r2,+soft-float
-      #
-      # 同时把 GCC linker 固定到 OpenWrt 24kc 参数。
+      # 特别重要：
+      # 不再强行传入旧通用 toolchain 的 linker 参数。
       # ============================================================
-      - name: Configure Rust for OpenWrt mipsel_24kc
+      - name: Configure Rust for OpenWrt MT7621
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           mkdir -p "$HOME/.cargo"
 
-          cat > "$HOME/.cargo/config.toml" <<'EOF'
+          cat > "$HOME/.cargo/config.toml" <<EOF
           [target.mipsel-unknown-linux-musl]
-          linker = "/opt/toolchain/mipsel-unknown-linux-musl/bin/mipsel-unknown-linux-musl-gcc"
+          linker = "$OPENWRT_CC"
 
           rustflags = [
               "-C", "target-cpu=mips32r2",
-              "-C", "target-feature=+mips32r2,+soft-float",
-              "-C", "link-arg=-mips32r2",
-              "-C", "link-arg=-mtune=24kc",
-              "-C", "link-arg=-mabi=32",
-              "-C", "link-arg=-msoft-float",
-              "-C", "link-arg=-mno-branch-likely"
+              "-C", "target-feature=+mips32r2,+soft-float"
           ]
           EOF
 
@@ -591,16 +808,11 @@ jobs:
           cargo --version
 
           echo
-          echo "=========================================="
-          echo "Installed Rust components"
-          echo "=========================================="
-
-          rustup component list --installed
+          echo "Cargo config:"
+          cat "$HOME/.cargo/config.toml"
 
           echo
-          echo "=========================================="
-          echo "Rust target specification"
-          echo "=========================================="
+          echo "Rust target specification:"
 
           rustc \
             +nightly \
@@ -611,38 +823,19 @@ jobs:
               '"arch"|"cpu"|"data-layout"|"features"|"llvm-target"' \
             || true
 
-          echo
-          echo "=========================================="
-          echo "Cargo config"
-          echo "=========================================="
-
-          cat "$HOME/.cargo/config.toml"
-
       # ============================================================
-      # 14. Patch SmartDNS UI
-      #
-      # 使用 build-std 确保 std/core 也使用同一个：
-      #
-      # mips32r2
-      # soft-float
-      #
+      # 15. Patch smartdns-ui build-std
       # ============================================================
-      - name: Patch SmartDNS UI for MIPS32r2 build-std
+      - name: Patch SmartDNS UI for Rust build-std
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           MAKEFILE="plugin/smartdns-ui/Makefile"
 
-          echo "=========================================="
-          echo "Original Cargo commands"
-          echo "=========================================="
+          echo "Original cargo commands:"
+          grep -n "cargo.*build" "$MAKEFILE" || true
 
-          grep -n \
-            "cargo.*build" \
-            "$MAKEFILE" \
-            || true
-
-          # 防止重复 patch
           if ! grep -q \
             'cargo build -Z build-std=std,panic_abort' \
             "$MAKEFILE"; then
@@ -654,72 +847,58 @@ jobs:
           fi
 
           echo
-          echo "=========================================="
-          echo "Patched Cargo commands"
-          echo "=========================================="
-
-          grep -n \
-            "cargo.*build" \
-            "$MAKEFILE" \
-            || true
+          echo "Patched cargo commands:"
+          grep -n "cargo.*build" "$MAKEFILE" || true
 
           if ! grep -q \
             'cargo build -Z build-std=std,panic_abort' \
             "$MAKEFILE"; then
 
-            echo "ERROR: Failed to patch smartdns-ui Makefile."
+            echo "ERROR: Failed to patch SmartDNS UI Makefile."
             exit 1
-
           fi
 
       # ============================================================
-      # 15. Build SmartDNS
+      # 16. Build SmartDNS + Dashboard
       #
-      # SmartDNS C 主程序：
+      # 最重要的一步：
       #
-      #   MIPS32r2
-      #   24Kc tuning
-      #   little endian
-      #   O32
-      #   soft-float
+      # CC/AR/RANLIB/STRIP 全部来自 OpenWrt SDK。
       #
-      # Rust Dashboard：
-      #
-      #   mipsel-unknown-linux-musl
-      #   MIPS32r2
-      #   soft-float
-      #
+      # OpenSSL 也由同一个 OpenWrt GCC 编译。
       # ============================================================
-      - name: Build SmartDNS OpenWrt mipsel_24kc with Dashboard UI
+      - name: Build SmartDNS with Dashboard UI
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           export RELEASE_VERSION="$PACKAGE_VERSION"
 
+          export PATH="$TOOLCHAIN_BIN:$PATH"
+
+          export CC="$OPENWRT_CC"
+          export AR="$OPENWRT_AR"
+          export RANLIB="$OPENWRT_RANLIB"
+          export STRIP="$OPENWRT_STRIP"
+
           export STATIC=yes
 
-          export CC="/opt/toolchain/mipsel-unknown-linux-musl/bin/mipsel-unknown-linux-musl-gcc"
+          # --------------------------------------------------------
+          # OpenSSL
+          # --------------------------------------------------------
+          export OPENSSL_ROOT_DIR="$HOME/openssl-openwrt-mt7621"
+          export OPENSSL_DIR="$HOME/openssl-openwrt-mt7621"
+          export OPENSSL_LIB_DIR="$HOME/openssl-openwrt-mt7621/lib"
+          export OPENSSL_INCLUDE_DIR="$HOME/openssl-openwrt-mt7621/include"
 
-          export AR="/opt/toolchain/mipsel-unknown-linux-musl/bin/mipsel-unknown-linux-musl-ar"
-
-          export RANLIB="/opt/toolchain/mipsel-unknown-linux-musl/bin/mipsel-unknown-linux-musl-ranlib"
-
-          export STRIP="/opt/toolchain/mipsel-unknown-linux-musl/bin/mipsel-unknown-linux-musl-strip"
-
-          export OBJDUMP="/opt/toolchain/mipsel-unknown-linux-musl/bin/mipsel-unknown-linux-musl-objdump"
-
-          export PATH="$(dirname "$CC"):$PATH"
+          export PKG_CONFIG_ALLOW_CROSS=1
 
           # --------------------------------------------------------
-          # OpenWrt mipsel_24kc CPU flags
+          # SmartDNS C flags
+          #
+          # CPU/ABI 由 OpenWrt 官方 compiler 决定。
           # --------------------------------------------------------
-
           export CFLAGS="-DFEATURE_CHECK_EDNS \
-          -mips32r2 \
-          -mtune=24kc \
-          -mabi=32 \
-          -msoft-float \
-          -mno-branch-likely \
           -O2 \
           -g \
           -Wall \
@@ -731,76 +910,26 @@ jobs:
           -Wshadow \
           -Wextra \
           -Wno-unused-parameter \
-          -Wno-implicit-fallthrough"
+          -Wno-implicit-fallthrough \
+          -I$HOME/openssl-openwrt-mt7621/include"
 
-          export CXXFLAGS="$CFLAGS"
-
-          # Rust target 本身已经是：
-          #
-          # MIPS32r2
-          # little endian
-          # soft-float
-          # O32
-          #
-          # ~/.cargo/config.toml 另外给 linker
-          # 指定了 24kc 参数。
+          export LDFLAGS="-L$HOME/openssl-openwrt-mt7621/lib"
 
           export CARGO_BUILD_TARGET="$RUST_TARGET"
 
           echo "=========================================="
-          echo "Building SmartDNS"
+          echo "SmartDNS Build"
           echo "=========================================="
-          echo "Build Type      : $BUILD_TYPE"
-          echo "Build Label     : $BUILD_LABEL"
-          echo "Source Ref      : $SOURCE_REF"
-          echo "Package Version : $RELEASE_VERSION"
-          echo "Git Commit      : $GIT_COMMIT"
-          echo
-          echo "OpenWrt Arch    : $OPENWRT_ARCH"
-          echo "CPU             : $TARGET_CPU"
-          echo "ISA             : $TARGET_ISA"
-          echo "Endian          : little"
-          echo "ABI             : o32"
-          echo "Float ABI       : soft-float"
+          echo "OpenWrt Version : $OPENWRT_VERSION"
+          echo "Target          : $OPENWRT_TARGET/$OPENWRT_SUBTARGET"
+          echo "Package Arch    : $OPENWRT_ARCH"
+          echo "Compiler        : $CC"
           echo "Rust Target     : $RUST_TARGET"
-          echo
-          echo "CFLAGS:"
-          echo "$CFLAGS"
+          echo "SmartDNS Source : $SOURCE_DESCRIPTION"
+          echo "Version         : $RELEASE_VERSION"
           echo "=========================================="
 
           "$CC" --version
-
-          rustc --version
-          cargo --version
-
-          echo
-          echo "=========================================="
-          echo "Compiler macros"
-          echo "=========================================="
-
-          echo | "$CC" \
-            -mips32r2 \
-            -mtune=24kc \
-            -mabi=32 \
-            -msoft-float \
-            -mno-branch-likely \
-            -dM \
-            -E \
-            - \
-            | grep -E \
-              '__MIPSEL|__mips|__mips_isa_rev|__mips_soft_float|_MIPS_SIM' \
-            | sort \
-            || true
-
-          echo
-          echo "=========================================="
-          echo "Final smartdns-ui Cargo command"
-          echo "=========================================="
-
-          grep -n \
-            "cargo.*build" \
-            plugin/smartdns-ui/Makefile \
-            || true
 
           chmod +x package/build-pkg.sh
 
@@ -814,99 +943,169 @@ jobs:
 
           echo
           echo "=========================================="
-          echo "SmartDNS build completed"
+          echo "Build output"
           echo "=========================================="
 
           find "$GITHUB_WORKSPACE" \
-            -maxdepth 5 \
+            -maxdepth 6 \
             -type f \
             \( \
               -name "*.apk" \
               -o \
-              -name "smartdns_ui.so" \
-              -o \
               -name "smartdns" \
+              -o \
+              -name "smartdns_ui.so" \
             \) \
             -print
 
       # ============================================================
-      # 16. Inspect Generated Binaries
-      #
-      # 这里非常重要。
-      #
-      # 编译完成后检查 ELF，
-      # 以后如果还有 SIGILL 可以直接看 Actions 日志。
+      # 17. Locate built SmartDNS / UI ELF
       # ============================================================
-      - name: Inspect MIPS32r2 Binaries
+      - name: Inspect Built ELF Files
+        shell: bash
         run: |
-          set -e
-
-          OBJDUMP="/opt/toolchain/mipsel-unknown-linux-musl/bin/mipsel-unknown-linux-musl-objdump"
+          set -euo pipefail
 
           echo "=========================================="
-          echo "Searching SmartDNS binaries"
+          echo "Finding SmartDNS ELF files"
           echo "=========================================="
 
-          find "$GITHUB_WORKSPACE" \
-            -type f \
-            \( \
-              -name "smartdns" \
-              -o \
-              -name "smartdns_ui.so" \
-            \) \
-            -print
-
-          echo
-          echo "=========================================="
-          echo "ELF inspection"
-          echo "=========================================="
-
-          while IFS= read -r FILE; do
-
-            echo
-            echo "------------------------------------------"
-            echo "$FILE"
-            echo "------------------------------------------"
-
-            "$OBJDUMP" \
-              -f \
-              "$FILE" \
-              2>/dev/null \
-              || true
-
-            "$OBJDUMP" \
-              -p \
-              "$FILE" \
-              2>/dev/null \
-              | head -n 100 \
-              || true
-
-          done < <(
+          mapfile -t ELF_FILES < <(
             find "$GITHUB_WORKSPACE" \
               -type f \
               \( \
                 -name "smartdns" \
                 -o \
                 -name "smartdns_ui.so" \
-              \)
+              \) \
+              -print
           )
 
+          if [ "${#ELF_FILES[@]}" -eq 0 ]; then
+            echo "ERROR: No SmartDNS ELF files found."
+            exit 1
+          fi
+
+          for FILE_PATH in "${ELF_FILES[@]}"; do
+
+            echo
+            echo "=========================================="
+            echo "$FILE_PATH"
+            echo "=========================================="
+
+            file "$FILE_PATH" || true
+
+            echo
+            echo "--- ELF header ---"
+
+            "$OPENWRT_READELF" \
+              -h \
+              "$FILE_PATH" \
+              || true
+
+            echo
+            echo "--- Program interpreter ---"
+
+            "$OPENWRT_READELF" \
+              -l \
+              "$FILE_PATH" \
+              | grep -i interpreter \
+              || true
+
+            echo
+            echo "--- Dynamic dependencies ---"
+
+            "$OPENWRT_READELF" \
+              -d \
+              "$FILE_PATH" \
+              | grep -E 'NEEDED|RPATH|RUNPATH' \
+              || true
+
+            echo
+            echo "--- MIPS attributes ---"
+
+            "$OPENWRT_READELF" \
+              -A \
+              "$FILE_PATH" \
+              || true
+
+          done
+
       # ============================================================
-      # 17. Build LuCI APP
+      # 18. Hard validation of SmartDNS interpreter
       #
-      # LuCI 本身是 all 架构。
+      # 对可执行 SmartDNS 主程序做硬检查。
+      #
+      # 如果又生成：
+      #
+      # /lib/ld-musl-mipsel.so.1
+      #
+      # Workflow 直接失败，
+      # 不允许上传这个 APK。
+      # ============================================================
+      - name: Validate SmartDNS OpenWrt Loader
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SMARTDNS_BIN=$(
+            find "$GITHUB_WORKSPACE" \
+              -type f \
+              -name smartdns \
+              -perm -111 \
+              | grep -v '/release-assets/' \
+              | head -n 1
+          )
+
+          if [ -z "$SMARTDNS_BIN" ]; then
+            echo "ERROR: SmartDNS executable not found."
+            exit 1
+          fi
+
+          echo "SmartDNS binary:"
+          echo "$SMARTDNS_BIN"
+
+          INTERPRETER=$(
+            "$OPENWRT_READELF" \
+              -l \
+              "$SMARTDNS_BIN" \
+              | sed -n \
+                's/.*Requesting program interpreter: \(.*\)]/\1/p'
+          )
+
+          echo
+          echo "SmartDNS interpreter:"
+          echo "$INTERPRETER"
+
+          if [ "$INTERPRETER" != "/lib/ld-musl-mipsel-sf.so.1" ]; then
+
+            echo
+            echo "=========================================="
+            echo "ERROR: WRONG SMARTDNS LOADER"
+            echo "=========================================="
+            echo
+            echo "Expected:"
+            echo "  /lib/ld-musl-mipsel-sf.so.1"
+            echo
+            echo "Actual:"
+            echo "  $INTERPRETER"
+            echo
+            echo "APK WILL NOT BE UPLOADED."
+            echo
+
+            exit 1
+          fi
+
+          echo
+          echo "SmartDNS loader validation PASSED."
+
+      # ============================================================
+      # 19. Build LuCI
       # ============================================================
       - name: Build LuCI App APK
+        shell: bash
         run: |
-          set -e
-
-          echo "=========================================="
-          echo "Building LuCI App"
-          echo "=========================================="
-          echo "Build Type      : $BUILD_TYPE"
-          echo "Build Label     : $BUILD_LABEL"
-          echo "Package Version : $PACKAGE_VERSION"
-          echo "=========================================="
+          set -euo pipefail
 
           chmod +x package/build-pkg.sh
 
@@ -920,7 +1119,7 @@ jobs:
 
           echo
           echo "=========================================="
-          echo "LuCI build completed"
+          echo "LuCI APK"
           echo "=========================================="
 
           find "$GITHUB_WORKSPACE" \
@@ -930,135 +1129,149 @@ jobs:
             -print
 
       # ============================================================
-      # 18. Collect APKs
+      # 20. Collect APKs
       # ============================================================
-      - name: Collect APKs and Build Information
+      - name: Collect APKs
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
+          rm -rf release-assets
           mkdir -p release-assets
-
-          echo "=========================================="
-          echo "Searching SmartDNS APK"
-          echo "=========================================="
 
           find "$GITHUB_WORKSPACE" \
             -type f \
             -name "smartdns.*.mipsel_24kc-openwrt-all.apk" \
             -exec cp -v {} release-assets/ \;
 
-          echo
-          echo "=========================================="
-          echo "Searching LuCI APK"
-          echo "=========================================="
-
           find "$GITHUB_WORKSPACE" \
             -type f \
             -name "luci-app-smartdns.*.all-luci-all.apk" \
             -exec cp -v {} release-assets/ \;
 
+          SMARTDNS_COUNT=$(
+            find release-assets \
+              -maxdepth 1 \
+              -type f \
+              -name "smartdns.*.mipsel_24kc-openwrt-all.apk" \
+              | wc -l
+          )
+
+          LUCI_COUNT=$(
+            find release-assets \
+              -maxdepth 1 \
+              -type f \
+              -name "luci-app-smartdns.*.all-luci-all.apk" \
+              | wc -l
+          )
+
+          if [ "$SMARTDNS_COUNT" -lt 1 ]; then
+            echo "ERROR: SmartDNS APK not found."
+            exit 1
+          fi
+
+          if [ "$LUCI_COUNT" -lt 1 ]; then
+            echo "ERROR: LuCI APK not found."
+            exit 1
+          fi
+
           cat > release-assets/BUILD-INFO.txt <<EOF
-          SmartDNS OpenWrt mipsel_24kc Build
+          SmartDNS Custom OpenWrt Build
           ========================================
 
-          Build Type      : $BUILD_TYPE
-          Build Label     : $BUILD_LABEL
-          Source          : $SOURCE_DESCRIPTION
-          Source Ref      : $SOURCE_REF
+          SmartDNS Build Type:
+          $BUILD_TYPE
 
-          Package Version : $PACKAGE_VERSION
+          SmartDNS Build Label:
+          $BUILD_LABEL
 
-          Git Commit      : $GIT_COMMIT
-          Full Git Commit : $GIT_COMMIT_FULL
+          SmartDNS Source:
+          $SOURCE_DESCRIPTION
 
-          OpenWrt Arch    : mipsel_24kc
-          CPU             : MIPS 24Kc
-          ISA             : MIPS32r2
-          Endian          : Little Endian
-          ABI             : O32
-          Float ABI       : Soft Float
+          SmartDNS Source Ref:
+          $SOURCE_REF
 
-          C CPU Flags:
-          -mips32r2
-          -mtune=24kc
-          -mabi=32
-          -msoft-float
-          -mno-branch-likely
+          SmartDNS Commit:
+          $GIT_COMMIT_FULL
+
+          Package Version:
+          $PACKAGE_VERSION
+
+          ----------------------------------------
+
+          OpenWrt Version:
+          $OPENWRT_VERSION
+
+          OpenWrt Target:
+          $OPENWRT_TARGET/$OPENWRT_SUBTARGET
+
+          OpenWrt Package Architecture:
+          $OPENWRT_ARCH
+
+          Hardware Family:
+          MediaTek MT7621
+
+          CPU Family:
+          MIPS 1004Kc
+
+          ISA:
+          MIPS32r2
+
+          Endian:
+          Little Endian
+
+          Runtime Loader:
+          /lib/ld-musl-mipsel-sf.so.1
+
+          ----------------------------------------
+
+          Toolchain:
+          Official OpenWrt SDK Toolchain
+
+          Toolchain Directory:
+          $TOOLCHAIN_DIR
+
+          Compiler:
+          $OPENWRT_CC
+
+          ----------------------------------------
+
+          Dashboard UI:
+          YES
+
+          LuCI:
+          YES
 
           Rust Target:
-          mipsel-unknown-linux-musl
+          $RUST_TARGET
 
-          Rust CPU:
-          mips32r2
+          Rust build-std:
+          YES
 
-          Rust Features:
-          +mips32r2,+soft-float
-
-          Dashboard UI    : YES
-          LuCI APP        : YES
-
-          Rust build-std  : YES
-
-          Package Format  : OpenWrt APK
+          Package Format:
+          APK
 
           ========================================
           EOF
 
           echo
           echo "=========================================="
-          echo "BUILD INFORMATION"
-          echo "=========================================="
-
-          cat release-assets/BUILD-INFO.txt
-
-          echo
-          echo "=========================================="
-          echo "Generated files"
+          echo "Release files"
           echo "=========================================="
 
           ls -lh release-assets/
 
-          SMARTDNS_COUNT=$(find release-assets \
-            -maxdepth 1 \
-            -type f \
-            -name "smartdns.*.mipsel_24kc-openwrt-all.apk" \
-            | wc -l)
-
-          LUCI_COUNT=$(find release-assets \
-            -maxdepth 1 \
-            -type f \
-            -name "luci-app-smartdns.*.all-luci-all.apk" \
-            | wc -l)
-
           echo
-          echo "SmartDNS APK count: $SMARTDNS_COUNT"
-          echo "LuCI APK count:     $LUCI_COUNT"
-
-          if [ "$SMARTDNS_COUNT" -lt 1 ]; then
-            echo "ERROR: SmartDNS mipsel_24kc APK was not generated."
-            exit 1
-          fi
-
-          if [ "$LUCI_COUNT" -lt 1 ]; then
-            echo "ERROR: LuCI APP APK was not generated."
-            exit 1
-          fi
+          cat release-assets/BUILD-INFO.txt
 
       # ============================================================
-      # 19. Upload Artifact
-      #
-      # Nightly:
-      #
-      # smartdns-nightly-openwrt-mipsel_24kc-ui-luci-xxxxxxx
-      #
-      # Stable:
-      #
-      # smartdns-Release48.4-openwrt-mipsel_24kc-ui-luci-xxxxxxx
+      # 21. Upload
       # ============================================================
       - name: Upload SmartDNS + LuCI APK Artifact
         uses: actions/upload-artifact@v6
         with:
-          name: smartdns-${{ steps.version.outputs.build_label }}-openwrt-mipsel_24kc-ui-luci-${{ steps.version.outputs.git_commit }}
+          name: >-
+            smartdns-${{ steps.version.outputs.build_label }}-openwrt-25.12.5-ramips-mt7621-${{ steps.version.outputs.git_commit }}
           path: release-assets/*
           if-no-files-found: error
           retention-days: 30
