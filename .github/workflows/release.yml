@@ -1,7 +1,29 @@
-name: Build SmartDNS MIPSEL OpenWrt APK with UI + LuCI
+name: Build SmartDNS OpenWrt mipsel_24kc APK with UI + LuCI
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+  # ============================================================
+  # OpenWrt Target
+  # ============================================================
+  OPENWRT_ARCH: mipsel_24kc
+  TARGET_CPU: 24kc
+  TARGET_ISA: mips32r2
+  RUST_TARGET: mipsel-unknown-linux-musl
+
+  # OpenWrt 24kc:
+  # CPU_CFLAGS_24kc = -mips32r2 -mtune=24kc
+  #
+  # 同时使用：
+  # -msoft-float
+  # -mabi=32
+  # -mno-branch-likely
+  MIPS_CFLAGS: >-
+    -mips32r2
+    -mtune=24kc
+    -mabi=32
+    -msoft-float
+    -mno-branch-likely
 
 on:
   workflow_dispatch:
@@ -20,36 +42,29 @@ permissions:
 
 jobs:
   build:
-    name: Build MIPSEL OpenWrt APK + UI + LuCI
+    name: Build OpenWrt mipsel_24kc + UI + LuCI
     runs-on: ubuntu-22.04
 
     steps:
-      # ------------------------------------------------------------
+
+      # ============================================================
       # 1. Checkout
-      #
-      # 先完整拉取仓库和所有 tag。
-      #
-      # nightly:
-      #   使用当前 master
-      #
-      # stable:
-      #   后面自动切换到最新 ReleaseXX tag
-      # ------------------------------------------------------------
+      # ============================================================
       - name: Checkout Code
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      # ------------------------------------------------------------
-      # 2. 选择 Nightly / Stable 源码
+      # ============================================================
+      # 2. 选择 Nightly / Stable
       #
       # nightly:
-      #   使用 master 当前 HEAD
+      #   当前 Fork master
       #
       # stable:
-      #   自动寻找最新正式 Release tag，
-      #   例如 Release48.4，并 checkout 到该 tag
-      # ------------------------------------------------------------
+      #   从 pymumu/smartdns 官方仓库获取 ReleaseXX tag
+      #   并自动选择最新稳定版
+      # ============================================================
       - name: Select SmartDNS Version
         id: version
         shell: bash
@@ -69,8 +84,6 @@ jobs:
             echo "Fetching official SmartDNS release tags"
             echo "=========================================="
 
-            # 添加官方 SmartDNS 仓库作为 upstream。
-            # 如果已经存在，则更新 URL。
             if git remote get-url upstream >/dev/null 2>&1; then
               git remote set-url upstream \
                 https://github.com/pymumu/smartdns.git
@@ -139,14 +152,6 @@ jobs:
             echo "Using Fork master as Nightly source"
             echo "=========================================="
 
-            #
-            # Nightly 使用你 Fork 当前 master。
-            #
-            # workflow_dispatch 在 master 上运行时，
-            # actions/checkout 已经 checkout 当前 master HEAD，
-            # 所以这里不再切换 tag。
-            #
-
             BUILD_LABEL="nightly"
             SOURCE_REF="master"
             SOURCE_DESCRIPTION="Nightly build from Fork master"
@@ -189,29 +194,28 @@ jobs:
           echo "package_version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
           echo "git_commit=$GIT_COMMIT" >> "$GITHUB_OUTPUT"
 
-      # ------------------------------------------------------------
+      # ============================================================
       # 3. Node.js
-      # SmartDNS WebUI 编译需要
-      # ------------------------------------------------------------
+      # ============================================================
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: '20'
 
-      # ------------------------------------------------------------
-      # 4. Rust Nightly + rust-src
+      # ============================================================
+      # 4. Rust Nightly
       #
-      # mipsel-unknown-linux-musl 没有官方预编译标准库，
-      # 使用 nightly + rust-src + build-std。
-      # ------------------------------------------------------------
+      # mipsel-unknown-linux-musl 没有预编译 std，
+      # 使用 rust-src + build-std。
+      # ============================================================
       - name: Setup Rust Nightly
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src
 
-      # ------------------------------------------------------------
-      # 5. Cargo 缓存
-      # ------------------------------------------------------------
+      # ============================================================
+      # 5. Cargo Cache
+      # ============================================================
       - name: Cache Cargo Dependencies
         uses: actions/cache@v5
         with:
@@ -219,14 +223,14 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             plugin/smartdns-ui/target
-          key: ${{ runner.os }}-cargo-mipsel-nightly-${{ hashFiles('plugin/smartdns-ui/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-mipsel24kc-nightly-${{ hashFiles('plugin/smartdns-ui/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-mipsel-nightly-
+            ${{ runner.os }}-cargo-mipsel24kc-nightly-
             ${{ runner.os }}-cargo-
 
-      # ------------------------------------------------------------
-      # 6. 系统依赖
-      # ------------------------------------------------------------
+      # ============================================================
+      # 6. System Dependencies
+      # ============================================================
       - name: Install System Dependencies
         run: |
           set -e
@@ -241,9 +245,13 @@ jobs:
             unzip \
             tar \
             make \
-            gcc
+            gcc \
+            binutils
 
+          # --------------------------------------------------------
           # 安装 Alpine apk.static
+          # --------------------------------------------------------
+
           APK_FILE=$(wget -qO- \
             https://dl-cdn.alpinelinux.org/alpine/latest-stable/main/x86_64/ \
             | grep -oE 'apk-tools-static-[0-9][a-zA-Z0-9.-]*\.apk' \
@@ -253,10 +261,17 @@ jobs:
             "https://dl-cdn.alpinelinux.org/alpine/latest-stable/main/x86_64/$APK_FILE" \
             -O /tmp/apk-tools-static.apk
 
-          tar -zxf /tmp/apk-tools-static.apk -C /tmp
+          tar -zxf \
+            /tmp/apk-tools-static.apk \
+            -C /tmp
 
-          sudo cp /tmp/sbin/apk.static /usr/local/bin/apk
-          sudo cp /tmp/sbin/apk.static /usr/bin/apk
+          sudo cp \
+            /tmp/sbin/apk.static \
+            /usr/local/bin/apk
+
+          sudo cp \
+            /tmp/sbin/apk.static \
+            /usr/bin/apk
 
           sudo chmod +x \
             /usr/local/bin/apk \
@@ -264,9 +279,9 @@ jobs:
 
           apk --version
 
-      # ------------------------------------------------------------
-      # 7. bindgen
-      # ------------------------------------------------------------
+      # ============================================================
+      # 7. Bindgen
+      # ============================================================
       - name: Cache Bindgen CLI
         uses: actions/cache@v5
         id: cache-bindgen
@@ -279,24 +294,38 @@ jobs:
         run: |
           cargo install --force --locked bindgen-cli
 
-      # ------------------------------------------------------------
-      # 8. MIPSEL Toolchain + OpenSSL 缓存
-      # ------------------------------------------------------------
+      # ============================================================
+      # 8. MIPSEL Toolchain + OpenSSL Cache
+      #
+      # 注意：
+      # 这里升级 cache key。
+      #
+      # 原来的 OpenSSL 没有按 24kc 参数编译，
+      # 绝对不能复用旧缓存。
+      # ============================================================
       - name: Cache MIPSEL Toolchain and OpenSSL
         uses: actions/cache@v5
         id: cache-toolchain
         with:
           path: ~/toolchain
-          key: ${{ runner.os }}-mipsel-toolchain-openssl-3.5.4-v1
+          key: ${{ runner.os }}-mipsel24kc-mips32r2-softfloat-openssl-3.5.4-v2
 
+      # ============================================================
+      # 9. Toolchain Directory
+      # ============================================================
       - name: Link Toolchain Directory
         run: |
-          sudo mkdir -p /opt
-          sudo ln -sfn "$HOME/toolchain" /opt/toolchain
+          set -e
 
-      # ------------------------------------------------------------
-      # 9. 下载 MIPSEL musl Toolchain
-      # ------------------------------------------------------------
+          sudo mkdir -p /opt
+
+          sudo ln -sfn \
+            "$HOME/toolchain" \
+            /opt/toolchain
+
+      # ============================================================
+      # 10. MIPSEL musl Cross Compiler
+      # ============================================================
       - name: Setup MIPSEL Musl Cross Compiler
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
@@ -317,7 +346,7 @@ jobs:
 
           cd "$HOME/toolchain"
 
-          ln -s \
+          ln -sfn \
             mipsel-linux-musl-cross \
             mipsel-unknown-linux-musl
 
@@ -334,20 +363,102 @@ jobs:
               new_base=$(echo "$base" \
                 | sed "s/$PREFIX_FROM/$PREFIX_TO/")
 
-              ln -s "$f" \
+              ln -sfn "$f" \
                 "$HOME/toolchain/mipsel-linux-musl-cross/bin/$new_base"
 
             fi
           done
 
-          ln -s \
+          ln -sfn \
             "${PREFIX_FROM}-objdump" \
             "$HOME/toolchain/mipsel-linux-musl-cross/bin/objdump"
 
-      # ------------------------------------------------------------
-      # 10. 编译 MIPSEL OpenSSL
-      # ------------------------------------------------------------
-      - name: Compile OpenSSL for MIPSEL
+      # ============================================================
+      # 11. Verify Toolchain
+      # ============================================================
+      - name: Verify MIPSEL Toolchain
+        run: |
+          set -e
+
+          CC="/opt/toolchain/mipsel-unknown-linux-musl/bin/mipsel-unknown-linux-musl-gcc"
+
+          echo "=========================================="
+          echo "Cross compiler"
+          echo "=========================================="
+
+          "$CC" --version
+
+          echo
+          echo "=========================================="
+          echo "Target information"
+          echo "=========================================="
+
+          echo "OpenWrt arch : $OPENWRT_ARCH"
+          echo "CPU          : $TARGET_CPU"
+          echo "ISA          : $TARGET_ISA"
+          echo "Endian       : little"
+          echo "ABI          : o32"
+          echo "Float ABI    : soft-float"
+          echo "CFLAGS       : $MIPS_CFLAGS"
+
+          echo
+          echo "=========================================="
+          echo "Compiler predefined macros"
+          echo "=========================================="
+
+          echo | "$CC" \
+            $MIPS_CFLAGS \
+            -dM \
+            -E \
+            - \
+            | grep -E \
+              '__MIPSEL|__mips|__mips_isa_rev|__mips_soft_float|_MIPS_SIM' \
+            | sort \
+            || true
+
+          echo
+          echo "=========================================="
+          echo "Compile test"
+          echo "=========================================="
+
+          cat > /tmp/mips-test.c <<'EOF'
+          int main(void)
+          {
+              return 0;
+          }
+          EOF
+
+          "$CC" \
+            $MIPS_CFLAGS \
+            /tmp/mips-test.c \
+            -o /tmp/mips-test
+
+          TOOLCHAIN_OBJDUMP="/opt/toolchain/mipsel-unknown-linux-musl/bin/mipsel-unknown-linux-musl-objdump"
+
+          "$TOOLCHAIN_OBJDUMP" \
+            -f \
+            /tmp/mips-test
+
+          "$TOOLCHAIN_OBJDUMP" \
+            -p \
+            /tmp/mips-test \
+            | head -n 80 \
+            || true
+
+      # ============================================================
+      # 12. Compile OpenSSL for OpenWrt mipsel_24kc
+      #
+      # 关键：
+      #
+      # CFLAGS:
+      #   -mips32r2
+      #   -mtune=24kc
+      #   -mabi=32
+      #   -msoft-float
+      #   -mno-branch-likely
+      #
+      # ============================================================
+      - name: Compile OpenSSL for OpenWrt mipsel_24kc
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
           set -e
@@ -356,11 +467,14 @@ jobs:
             https://github.com/openssl/openssl/releases/download/openssl-3.5.4/openssl-3.5.4.tar.gz \
             -O /tmp/openssl-3.5.4.tar.gz
 
+          rm -rf /tmp/build-openssl
+
           mkdir -p /tmp/build-openssl
 
           cd /tmp/build-openssl
 
-          tar -xzf /tmp/openssl-3.5.4.tar.gz
+          tar -xzf \
+            /tmp/openssl-3.5.4.tar.gz
 
           cd openssl-3.5.4
 
@@ -368,7 +482,23 @@ jobs:
 
           SYSROOT=$($CC --print-sysroot)
 
-          CC="$CC" ./Configure \
+          echo "=========================================="
+          echo "Building OpenSSL"
+          echo "=========================================="
+          echo "Target  : OpenWrt mipsel_24kc"
+          echo "CPU     : 24kc"
+          echo "ISA     : MIPS32r2"
+          echo "Endian  : little"
+          echo "ABI     : o32"
+          echo "Float   : soft"
+          echo "SYSROOT : $SYSROOT"
+          echo "CFLAGS  : $MIPS_CFLAGS -Os"
+          echo "=========================================="
+
+          export CC="$CC"
+          export CFLAGS="$MIPS_CFLAGS -Os"
+
+          ./Configure \
             linux-generic32 \
             --prefix="$SYSROOT" \
             no-shared \
@@ -414,17 +544,25 @@ jobs:
             no-whirlpool \
             no-ssl-trace \
             no-ssl \
-            no-ssl3 \
-            -Os
+            no-ssl3
 
-          make -j$(nproc)
+          make -j"$(nproc)"
 
           sudo make install_sw
 
-      # ------------------------------------------------------------
-      # 11. 配置 Rust MIPSEL Linker
-      # ------------------------------------------------------------
-      - name: Configure Rust MIPSEL Linker
+      # ============================================================
+      # 13. Configure Rust
+      #
+      # Rust 内置 mipsel-unknown-linux-musl：
+      #
+      # CPU      = mips32r2
+      # Endian   = little
+      # ABI      = O32
+      # features = +mips32r2,+soft-float
+      #
+      # 同时把 GCC linker 固定到 OpenWrt 24kc 参数。
+      # ============================================================
+      - name: Configure Rust for OpenWrt mipsel_24kc
         run: |
           set -e
 
@@ -433,10 +571,20 @@ jobs:
           cat > "$HOME/.cargo/config.toml" <<'EOF'
           [target.mipsel-unknown-linux-musl]
           linker = "/opt/toolchain/mipsel-unknown-linux-musl/bin/mipsel-unknown-linux-musl-gcc"
+
+          rustflags = [
+              "-C", "target-cpu=mips32r2",
+              "-C", "target-feature=+mips32r2,+soft-float",
+              "-C", "link-arg=-mips32r2",
+              "-C", "link-arg=-mtune=24kc",
+              "-C", "link-arg=-mabi=32",
+              "-C", "link-arg=-msoft-float",
+              "-C", "link-arg=-mno-branch-likely"
+          ]
           EOF
 
           echo "=========================================="
-          echo "Rust:"
+          echo "Rust"
           echo "=========================================="
 
           rustc --version
@@ -444,51 +592,76 @@ jobs:
 
           echo
           echo "=========================================="
-          echo "Installed Rust components:"
+          echo "Installed Rust components"
           echo "=========================================="
 
           rustup component list --installed
 
           echo
           echo "=========================================="
-          echo "Cargo config:"
+          echo "Rust target specification"
+          echo "=========================================="
+
+          rustc \
+            +nightly \
+            -Z unstable-options \
+            --print target-spec-json \
+            --target "$RUST_TARGET" \
+            | grep -E \
+              '"arch"|"cpu"|"data-layout"|"features"|"llvm-target"' \
+            || true
+
+          echo
+          echo "=========================================="
+          echo "Cargo config"
           echo "=========================================="
 
           cat "$HOME/.cargo/config.toml"
 
-      # ------------------------------------------------------------
-      # 12. Patch SmartDNS UI
+      # ============================================================
+      # 14. Patch SmartDNS UI
       #
-      # mipsel-unknown-linux-musl 没有预编译 core/std。
-      # 强制 cargo build 使用 build-std。
-      # ------------------------------------------------------------
-      - name: Patch SmartDNS UI for MIPSEL build-std
+      # 使用 build-std 确保 std/core 也使用同一个：
+      #
+      # mips32r2
+      # soft-float
+      #
+      # ============================================================
+      - name: Patch SmartDNS UI for MIPS32r2 build-std
         run: |
           set -e
 
           MAKEFILE="plugin/smartdns-ui/Makefile"
 
           echo "=========================================="
-          echo "Original Cargo commands:"
+          echo "Original Cargo commands"
           echo "=========================================="
 
-          grep -n "cargo.*build" "$MAKEFILE" || true
+          grep -n \
+            "cargo.*build" \
+            "$MAKEFILE" \
+            || true
 
-          sed -i \
-            's/cargo build/cargo build -Z build-std=std,panic_abort/g' \
-            "$MAKEFILE"
+          # 防止重复 patch
+          if ! grep -q \
+            'cargo build -Z build-std=std,panic_abort' \
+            "$MAKEFILE"; then
+
+            sed -i \
+              's/cargo build/cargo build -Z build-std=std,panic_abort/g' \
+              "$MAKEFILE"
+
+          fi
 
           echo
           echo "=========================================="
-          echo "Patched Cargo commands:"
+          echo "Patched Cargo commands"
           echo "=========================================="
 
-          grep -n "cargo.*build" "$MAKEFILE" || true
-
-          echo
-          echo "=========================================="
-          echo "Check patch:"
-          echo "=========================================="
+          grep -n \
+            "cargo.*build" \
+            "$MAKEFILE" \
+            || true
 
           if ! grep -q \
             'cargo build -Z build-std=std,panic_abort' \
@@ -496,15 +669,28 @@ jobs:
 
             echo "ERROR: Failed to patch smartdns-ui Makefile."
             exit 1
+
           fi
 
-      # ------------------------------------------------------------
-      # 13. 编译 SmartDNS MIPSEL + Dashboard UI
+      # ============================================================
+      # 15. Build SmartDNS
       #
-      # 生成：
-      # smartdns.*.mipsel-openwrt-all.apk
-      # ------------------------------------------------------------
-      - name: Build SmartDNS MIPSEL OpenWrt with Dashboard UI
+      # SmartDNS C 主程序：
+      #
+      #   MIPS32r2
+      #   24Kc tuning
+      #   little endian
+      #   O32
+      #   soft-float
+      #
+      # Rust Dashboard：
+      #
+      #   mipsel-unknown-linux-musl
+      #   MIPS32r2
+      #   soft-float
+      #
+      # ============================================================
+      - name: Build SmartDNS OpenWrt mipsel_24kc with Dashboard UI
         run: |
           set -e
 
@@ -512,7 +698,28 @@ jobs:
 
           export STATIC=yes
 
+          export CC="/opt/toolchain/mipsel-unknown-linux-musl/bin/mipsel-unknown-linux-musl-gcc"
+
+          export AR="/opt/toolchain/mipsel-unknown-linux-musl/bin/mipsel-unknown-linux-musl-ar"
+
+          export RANLIB="/opt/toolchain/mipsel-unknown-linux-musl/bin/mipsel-unknown-linux-musl-ranlib"
+
+          export STRIP="/opt/toolchain/mipsel-unknown-linux-musl/bin/mipsel-unknown-linux-musl-strip"
+
+          export OBJDUMP="/opt/toolchain/mipsel-unknown-linux-musl/bin/mipsel-unknown-linux-musl-objdump"
+
+          export PATH="$(dirname "$CC"):$PATH"
+
+          # --------------------------------------------------------
+          # OpenWrt mipsel_24kc CPU flags
+          # --------------------------------------------------------
+
           export CFLAGS="-DFEATURE_CHECK_EDNS \
+          -mips32r2 \
+          -mtune=24kc \
+          -mabi=32 \
+          -msoft-float \
+          -mno-branch-likely \
           -O2 \
           -g \
           -Wall \
@@ -526,9 +733,19 @@ jobs:
           -Wno-unused-parameter \
           -Wno-implicit-fallthrough"
 
-          export CC=/opt/toolchain/mipsel-unknown-linux-musl/bin/mipsel-unknown-linux-musl-gcc
+          export CXXFLAGS="$CFLAGS"
 
-          export PATH="$(dirname "$CC"):$PATH"
+          # Rust target 本身已经是：
+          #
+          # MIPS32r2
+          # little endian
+          # soft-float
+          # O32
+          #
+          # ~/.cargo/config.toml 另外给 linker
+          # 指定了 24kc 参数。
+
+          export CARGO_BUILD_TARGET="$RUST_TARGET"
 
           echo "=========================================="
           echo "Building SmartDNS"
@@ -538,6 +755,17 @@ jobs:
           echo "Source Ref      : $SOURCE_REF"
           echo "Package Version : $RELEASE_VERSION"
           echo "Git Commit      : $GIT_COMMIT"
+          echo
+          echo "OpenWrt Arch    : $OPENWRT_ARCH"
+          echo "CPU             : $TARGET_CPU"
+          echo "ISA             : $TARGET_ISA"
+          echo "Endian          : little"
+          echo "ABI             : o32"
+          echo "Float ABI       : soft-float"
+          echo "Rust Target     : $RUST_TARGET"
+          echo
+          echo "CFLAGS:"
+          echo "$CFLAGS"
           echo "=========================================="
 
           "$CC" --version
@@ -547,7 +775,26 @@ jobs:
 
           echo
           echo "=========================================="
-          echo "Final smartdns-ui Cargo command:"
+          echo "Compiler macros"
+          echo "=========================================="
+
+          echo | "$CC" \
+            -mips32r2 \
+            -mtune=24kc \
+            -mabi=32 \
+            -msoft-float \
+            -mno-branch-likely \
+            -dM \
+            -E \
+            - \
+            | grep -E \
+              '__MIPSEL|__mips|__mips_isa_rev|__mips_soft_float|_MIPS_SIM' \
+            | sort \
+            || true
+
+          echo
+          echo "=========================================="
+          echo "Final smartdns-ui Cargo command"
           echo "=========================================="
 
           grep -n \
@@ -560,7 +807,7 @@ jobs:
           ./package/build-pkg.sh \
             --platform openwrt \
             --arch all \
-            --filearch=mipsel-openwrt-all \
+            --filearch=mipsel_24kc-openwrt-all \
             --ver "$RELEASE_VERSION" \
             --outputdir "$GITHUB_WORKSPACE" \
             --with-ui
@@ -571,23 +818,84 @@ jobs:
           echo "=========================================="
 
           find "$GITHUB_WORKSPACE" \
-            -maxdepth 4 \
+            -maxdepth 5 \
             -type f \
             \( \
               -name "*.apk" \
               -o \
               -name "smartdns_ui.so" \
+              -o \
+              -name "smartdns" \
             \) \
             -print
 
-      # ------------------------------------------------------------
-      # 14. 编译 LuCI APP
+      # ============================================================
+      # 16. Inspect Generated Binaries
       #
-      # LuCI 为 all 架构。
+      # 这里非常重要。
       #
-      # 生成：
-      # luci-app-smartdns.*.all-luci-all.apk
-      # ------------------------------------------------------------
+      # 编译完成后检查 ELF，
+      # 以后如果还有 SIGILL 可以直接看 Actions 日志。
+      # ============================================================
+      - name: Inspect MIPS32r2 Binaries
+        run: |
+          set -e
+
+          OBJDUMP="/opt/toolchain/mipsel-unknown-linux-musl/bin/mipsel-unknown-linux-musl-objdump"
+
+          echo "=========================================="
+          echo "Searching SmartDNS binaries"
+          echo "=========================================="
+
+          find "$GITHUB_WORKSPACE" \
+            -type f \
+            \( \
+              -name "smartdns" \
+              -o \
+              -name "smartdns_ui.so" \
+            \) \
+            -print
+
+          echo
+          echo "=========================================="
+          echo "ELF inspection"
+          echo "=========================================="
+
+          while IFS= read -r FILE; do
+
+            echo
+            echo "------------------------------------------"
+            echo "$FILE"
+            echo "------------------------------------------"
+
+            "$OBJDUMP" \
+              -f \
+              "$FILE" \
+              2>/dev/null \
+              || true
+
+            "$OBJDUMP" \
+              -p \
+              "$FILE" \
+              2>/dev/null \
+              | head -n 100 \
+              || true
+
+          done < <(
+            find "$GITHUB_WORKSPACE" \
+              -type f \
+              \( \
+                -name "smartdns" \
+                -o \
+                -name "smartdns_ui.so" \
+              \)
+          )
+
+      # ============================================================
+      # 17. Build LuCI APP
+      #
+      # LuCI 本身是 all 架构。
+      # ============================================================
       - name: Build LuCI App APK
         run: |
           set -e
@@ -616,14 +924,14 @@ jobs:
           echo "=========================================="
 
           find "$GITHUB_WORKSPACE" \
-            -maxdepth 4 \
+            -maxdepth 5 \
             -type f \
             -name "luci-app-smartdns*.apk" \
             -print
 
-      # ------------------------------------------------------------
-      # 15. 收集 APK + BUILD-INFO.txt
-      # ------------------------------------------------------------
+      # ============================================================
+      # 18. Collect APKs
+      # ============================================================
       - name: Collect APKs and Build Information
         run: |
           set -e
@@ -631,17 +939,17 @@ jobs:
           mkdir -p release-assets
 
           echo "=========================================="
-          echo "Searching SmartDNS APK..."
+          echo "Searching SmartDNS APK"
           echo "=========================================="
 
           find "$GITHUB_WORKSPACE" \
             -type f \
-            -name "smartdns.*.mipsel-openwrt-all.apk" \
+            -name "smartdns.*.mipsel_24kc-openwrt-all.apk" \
             -exec cp -v {} release-assets/ \;
 
           echo
           echo "=========================================="
-          echo "Searching LuCI APK..."
+          echo "Searching LuCI APK"
           echo "=========================================="
 
           find "$GITHUB_WORKSPACE" \
@@ -650,7 +958,7 @@ jobs:
             -exec cp -v {} release-assets/ \;
 
           cat > release-assets/BUILD-INFO.txt <<EOF
-          SmartDNS MIPSEL OpenWrt Build
+          SmartDNS OpenWrt mipsel_24kc Build
           ========================================
 
           Build Type      : $BUILD_TYPE
@@ -663,14 +971,35 @@ jobs:
           Git Commit      : $GIT_COMMIT
           Full Git Commit : $GIT_COMMIT_FULL
 
-          Architecture    : MIPSEL
-          Package Format  : OpenWrt APK
+          OpenWrt Arch    : mipsel_24kc
+          CPU             : MIPS 24Kc
+          ISA             : MIPS32r2
+          Endian          : Little Endian
+          ABI             : O32
+          Float ABI       : Soft Float
+
+          C CPU Flags:
+          -mips32r2
+          -mtune=24kc
+          -mabi=32
+          -msoft-float
+          -mno-branch-likely
+
+          Rust Target:
+          mipsel-unknown-linux-musl
+
+          Rust CPU:
+          mips32r2
+
+          Rust Features:
+          +mips32r2,+soft-float
 
           Dashboard UI    : YES
           LuCI APP        : YES
 
-          Rust Target     : mipsel-unknown-linux-musl
           Rust build-std  : YES
+
+          Package Format  : OpenWrt APK
 
           ========================================
           EOF
@@ -692,7 +1021,7 @@ jobs:
           SMARTDNS_COUNT=$(find release-assets \
             -maxdepth 1 \
             -type f \
-            -name "smartdns.*.mipsel-openwrt-all.apk" \
+            -name "smartdns.*.mipsel_24kc-openwrt-all.apk" \
             | wc -l)
 
           LUCI_COUNT=$(find release-assets \
@@ -706,7 +1035,7 @@ jobs:
           echo "LuCI APK count:     $LUCI_COUNT"
 
           if [ "$SMARTDNS_COUNT" -lt 1 ]; then
-            echo "ERROR: SmartDNS MIPSEL APK was not generated."
+            echo "ERROR: SmartDNS mipsel_24kc APK was not generated."
             exit 1
           fi
 
@@ -715,21 +1044,21 @@ jobs:
             exit 1
           fi
 
-      # ------------------------------------------------------------
-      # 16. 上传 Artifact
+      # ============================================================
+      # 19. Upload Artifact
       #
-      # Nightly 示例：
+      # Nightly:
       #
-      # smartdns-nightly-mipsel-openwrt-ui-luci-abcdef1
+      # smartdns-nightly-openwrt-mipsel_24kc-ui-luci-xxxxxxx
       #
-      # Stable 示例：
+      # Stable:
       #
-      # smartdns-Release48.4-mipsel-openwrt-ui-luci-21c940e
-      # ------------------------------------------------------------
+      # smartdns-Release48.4-openwrt-mipsel_24kc-ui-luci-xxxxxxx
+      # ============================================================
       - name: Upload SmartDNS + LuCI APK Artifact
         uses: actions/upload-artifact@v6
         with:
-          name: smartdns-${{ steps.version.outputs.build_label }}-mipsel-openwrt-ui-luci-${{ steps.version.outputs.git_commit }}
+          name: smartdns-${{ steps.version.outputs.build_label }}-openwrt-mipsel_24kc-ui-luci-${{ steps.version.outputs.git_commit }}
           path: release-assets/*
           if-no-files-found: error
           retention-days: 30
