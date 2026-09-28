@@ -249,11 +249,11 @@ jobs:
       - name: Build SmartDNS MIPSEL OpenWrt with UI
         run: |
           set -e
-
+      
           export RELEASE_VERSION="$(date +"1.%Y.%m.%d-%H%M")"
-
+      
           export STATIC=yes
-
+      
           export CFLAGS="-DFEATURE_CHECK_EDNS \
           -O2 \
           -g \
@@ -267,14 +267,26 @@ jobs:
           -Wextra \
           -Wno-unused-parameter \
           -Wno-implicit-fallthrough"
-
+      
           export CC=/opt/toolchain/mipsel-unknown-linux-musl/bin/mipsel-unknown-linux-musl-gcc
-
-          # 保证 gcc / strip / objdump 都使用 MIPSEL 工具链
           export PATH="$(dirname "$CC"):$PATH"
-
+      
+          # ------------------------------------------------
+          # Rust mipsel-unknown-linux-musl 没有预编译 std，
+          # 使用 nightly + rust-src 自行编译标准库
+          # ------------------------------------------------
+          mkdir -p "$HOME/.cargo"
+      
+          cat > "$HOME/.cargo/config.toml" <<'EOF'
+          [unstable]
+          build-std = ["std", "panic_abort"]
+      
+          [target.mipsel-unknown-linux-musl]
+          linker = "/opt/toolchain/mipsel-unknown-linux-musl/bin/mipsel-unknown-linux-musl-gcc"
+          EOF
+      
           chmod +x package/build-pkg.sh
-
+      
           ./package/build-pkg.sh \
             --platform openwrt \
             --arch all \
