@@ -31,11 +31,15 @@ jobs:
           node-version: '20'
 
       # ------------------------------------------------------------
-      # 3. Rust
-      # smartdns_ui.so 使用 Rust 编译
+      # 3. Rust Nightly + rust-src
+      #
+      # mipsel-unknown-linux-musl 没有官方预编译标准库，
+      # 必须使用 nightly + rust-src + build-std
       # ------------------------------------------------------------
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust Nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
 
       # ------------------------------------------------------------
       # 4. Cargo 缓存
@@ -47,8 +51,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             plugin/smartdns-ui/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('plugin/smartdns-ui/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-mipsel-nightly-${{ hashFiles('plugin/smartdns-ui/Cargo.lock') }}
           restore-keys: |
+            ${{ runner.os }}-cargo-mipsel-nightly-
             ${{ runner.os }}-cargo-
 
       # ------------------------------------------------------------
@@ -56,7 +61,10 @@ jobs:
       # ------------------------------------------------------------
       - name: Install System Dependencies
         run: |
+          set -e
+
           sudo apt-get update
+
           sudo apt-get install -y \
             libgtest-dev \
             dnsperf \
@@ -81,20 +89,22 @@ jobs:
 
           sudo cp /tmp/sbin/apk.static /usr/local/bin/apk
           sudo cp /tmp/sbin/apk.static /usr/bin/apk
-          sudo chmod +x /usr/local/bin/apk /usr/bin/apk
+
+          sudo chmod +x \
+            /usr/local/bin/apk \
+            /usr/bin/apk
 
           apk --version
 
       # ------------------------------------------------------------
       # 6. bindgen
-      # smartdns-ui Makefile 需要
       # ------------------------------------------------------------
       - name: Cache Bindgen CLI
         uses: actions/cache@v5
         id: cache-bindgen
         with:
           path: ~/.cargo/bin/bindgen
-          key: ${{ runner.os }}-bindgen-cli-0.69.5
+          key: ${{ runner.os }}-bindgen-cli-nightly-0.69.5
 
       - name: Install Bindgen CLI
         if: steps.cache-bindgen.outputs.cache-hit != 'true'
@@ -117,7 +127,7 @@ jobs:
           sudo ln -sfn "$HOME/toolchain" /opt/toolchain
 
       # ------------------------------------------------------------
-      # 8. 只下载 MIPSEL musl toolchain
+      # 8. 下载 MIPSEL musl toolchain
       # ------------------------------------------------------------
       - name: Setup MIPSEL Musl Cross Compiler
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
@@ -128,11 +138,13 @@ jobs:
 
           URL="https://github.com/OpenListTeam/musl-compilers/releases/download/2025-06-12/mipsel-linux-musl-cross.tgz"
 
-          wget "$URL" -O /tmp/mipsel-toolchain.tgz
+          wget "$URL" \
+            -O /tmp/mipsel-toolchain.tgz
 
           gzip -t /tmp/mipsel-toolchain.tgz
 
-          tar -C "$HOME/toolchain" \
+          tar \
+            -C "$HOME/toolchain" \
             -xzf /tmp/mipsel-toolchain.tgz
 
           cd "$HOME/toolchain"
@@ -141,8 +153,6 @@ jobs:
             mipsel-linux-musl-cross \
             mipsel-unknown-linux-musl
 
-          # 官方 workflow 的处理方式：
-          # 为工具链命令建立 unknown-linux-musl 名称的软链接
           PREFIX_FROM="mipsel-linux-musl"
           PREFIX_TO="mipsel-unknown-linux-musl"
 
@@ -150,11 +160,15 @@ jobs:
             "$HOME/toolchain/mipsel-linux-musl-cross/bin/${PREFIX_FROM}"-*; do
 
             if [ -f "$f" ]; then
+
               base=$(basename "$f")
-              new_base=$(echo "$base" | sed "s/$PREFIX_FROM/$PREFIX_TO/")
+
+              new_base=$(echo "$base" \
+                | sed "s/$PREFIX_FROM/$PREFIX_TO/")
 
               ln -s "$f" \
                 "$HOME/toolchain/mipsel-linux-musl-cross/bin/$new_base"
+
             fi
           done
 
@@ -163,7 +177,7 @@ jobs:
             "$HOME/toolchain/mipsel-linux-musl-cross/bin/objdump"
 
       # ------------------------------------------------------------
-      # 9. 只编译 MIPSEL OpenSSL
+      # 9. 编译 MIPSEL OpenSSL
       # ------------------------------------------------------------
       - name: Compile OpenSSL for MIPSEL
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
@@ -175,16 +189,19 @@ jobs:
             -O /tmp/openssl-3.5.4.tar.gz
 
           mkdir -p /tmp/build-openssl
+
           cd /tmp/build-openssl
 
           tar -xzf /tmp/openssl-3.5.4.tar.gz
+
           cd openssl-3.5.4
 
           CC="/opt/toolchain/mipsel-unknown-linux-musl/bin/mipsel-unknown-linux-musl-gcc"
 
           SYSROOT=$($CC --print-sysroot)
 
-          CC="$CC" ./Configure linux-generic32 \
+          CC="$CC" ./Configure \
+            linux-generic32 \
             --prefix="$SYSROOT" \
             no-shared \
             no-tests \
@@ -233,27 +250,112 @@ jobs:
             -Os
 
           make -j$(nproc)
+
           sudo make install_sw
 
       # ------------------------------------------------------------
-      # 10. 编译 SmartDNS
+      # 10. 配置 Rust MIPSEL linker
+      # ------------------------------------------------------------
+      - name: Configure Rust MIPSEL Linker
+        run: |
+          set -e
+
+          mkdir -p "$HOME/.cargo"
+
+          cat > "$HOME/.cargo/config.toml" <<'EOF'
+          [target.mipsel-unknown-linux-musl]
+          linker = "/opt/toolchain/mipsel-unknown-linux-musl/bin/mipsel-unknown-linux-musl-gcc"
+          EOF
+
+          echo "=========================================="
+          echo "Rust:"
+          echo "=========================================="
+
+          rustc --version
+          cargo --version
+
+          echo
+          echo "=========================================="
+          echo "Installed Rust components:"
+          echo "=========================================="
+
+          rustup component list --installed
+
+          echo
+          echo "=========================================="
+          echo "Cargo config:"
+          echo "=========================================="
+
+          cat "$HOME/.cargo/config.toml"
+
+      # ------------------------------------------------------------
+      # 11. 修改 smartdns-ui Makefile
+      #
+      # mipsel-unknown-linux-musl 没有官方预编译 core/std。
+      #
+      # 必须让真正执行 smartdns-ui 编译的 cargo build 使用：
+      #
+      # -Z build-std=std,panic_abort
+      # ------------------------------------------------------------
+      - name: Patch SmartDNS UI for MIPSEL build-std
+        run: |
+          set -e
+
+          MAKEFILE="plugin/smartdns-ui/Makefile"
+
+          echo "=========================================="
+          echo "Original Cargo commands:"
+          echo "=========================================="
+
+          grep -n "cargo.*build" "$MAKEFILE" || true
+
+          # 给所有 cargo build 加上 build-std
+          sed -i \
+            's/cargo build/cargo build -Z build-std=std,panic_abort/g' \
+            "$MAKEFILE"
+
+          echo
+          echo "=========================================="
+          echo "Patched Cargo commands:"
+          echo "=========================================="
+
+          grep -n "cargo.*build" "$MAKEFILE" || true
+
+          echo
+          echo "=========================================="
+          echo "Check patch:"
+          echo "=========================================="
+
+          if ! grep -q \
+            'cargo build -Z build-std=std,panic_abort' \
+            "$MAKEFILE"; then
+
+            echo "ERROR: Failed to patch smartdns-ui Makefile."
+            exit 1
+          fi
+
+      # ------------------------------------------------------------
+      # 12. 编译 SmartDNS
       #
       # 只构建：
-      #   MIPSEL
-      #   OpenWrt
-      #   UI
       #
-      # 相当于官方：
-      #   build mipsel openwrt nobuild ui
+      # MIPSEL
+      # OpenWrt
+      # UI
+      # APK
+      #
+      # 注意：
+      # 不使用 --only-package，
+      # 因为必须先生成 src/smartdns。
       # ------------------------------------------------------------
       - name: Build SmartDNS MIPSEL OpenWrt with UI
         run: |
           set -e
-      
+
           export RELEASE_VERSION="$(date +"1.%Y.%m.%d-%H%M")"
-      
+
           export STATIC=yes
-      
+
           export CFLAGS="-DFEATURE_CHECK_EDNS \
           -O2 \
           -g \
@@ -267,26 +369,37 @@ jobs:
           -Wextra \
           -Wno-unused-parameter \
           -Wno-implicit-fallthrough"
-      
+
           export CC=/opt/toolchain/mipsel-unknown-linux-musl/bin/mipsel-unknown-linux-musl-gcc
+
           export PATH="$(dirname "$CC"):$PATH"
-      
-          # ------------------------------------------------
-          # Rust mipsel-unknown-linux-musl 没有预编译 std，
-          # 使用 nightly + rust-src 自行编译标准库
-          # ------------------------------------------------
-          mkdir -p "$HOME/.cargo"
-      
-          cat > "$HOME/.cargo/config.toml" <<'EOF'
-          [unstable]
-          build-std = ["std", "panic_abort"]
-      
-          [target.mipsel-unknown-linux-musl]
-          linker = "/opt/toolchain/mipsel-unknown-linux-musl/bin/mipsel-unknown-linux-musl-gcc"
-          EOF
-      
+
+          echo "=========================================="
+          echo "Compiler:"
+          echo "=========================================="
+
+          "$CC" --version
+
+          echo
+          echo "=========================================="
+          echo "Rust:"
+          echo "=========================================="
+
+          rustc --version
+          cargo --version
+
+          echo
+          echo "=========================================="
+          echo "Final smartdns-ui Cargo command:"
+          echo "=========================================="
+
+          grep -n \
+            "cargo.*build" \
+            plugin/smartdns-ui/Makefile \
+            || true
+
           chmod +x package/build-pkg.sh
-      
+
           ./package/build-pkg.sh \
             --platform openwrt \
             --arch all \
@@ -301,13 +414,17 @@ jobs:
           echo "=========================================="
 
           find "$GITHUB_WORKSPACE" \
-            -maxdepth 2 \
+            -maxdepth 4 \
             -type f \
-            \( -name "*.apk" -o -name "smartdns_ui.so" \) \
+            \( \
+              -name "*.apk" \
+              -o \
+              -name "smartdns_ui.so" \
+            \) \
             -print
 
       # ------------------------------------------------------------
-      # 11. 只收集 APK
+      # 13. 收集 APK
       # ------------------------------------------------------------
       - name: Collect APK
         run: |
@@ -316,7 +433,6 @@ jobs:
           mkdir -p release-assets
 
           find "$GITHUB_WORKSPACE" \
-            -maxdepth 2 \
             -type f \
             -name "*.apk" \
             -exec cp -v {} release-assets/ \;
@@ -336,13 +452,11 @@ jobs:
 
             echo "ERROR: No APK package was generated."
             exit 1
+
           fi
 
       # ------------------------------------------------------------
-      # 12. 上传到 GitHub Actions Artifacts
-      #
-      # 不创建 Release / Nightly
-      # 直接在本次 Actions 页面下载
+      # 14. 上传 APK
       # ------------------------------------------------------------
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v6
