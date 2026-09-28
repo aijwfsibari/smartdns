@@ -62,42 +62,94 @@ jobs:
           echo "Requested build type: $BUILD_TYPE"
           echo "=========================================="
 
-          # 确保 tag 完整
-          git fetch --force --tags
-
           if [ "$BUILD_TYPE" = "stable" ]; then
 
             echo
-            echo "Finding latest official Release tag..."
+            echo "=========================================="
+            echo "Fetching official SmartDNS release tags"
+            echo "=========================================="
+
+            # 添加官方 SmartDNS 仓库作为 upstream。
+            # 如果已经存在，则更新 URL。
+            if git remote get-url upstream >/dev/null 2>&1; then
+              git remote set-url upstream \
+                https://github.com/pymumu/smartdns.git
+            else
+              git remote add upstream \
+                https://github.com/pymumu/smartdns.git
+            fi
+
+            echo
+            echo "Official upstream:"
+            git remote get-url upstream
+
+            echo
+            echo "Fetching official tags..."
+
+            git fetch \
+              --force \
+              --tags \
+              upstream
+
+            echo
+            echo "=========================================="
+            echo "Available official Release tags"
+            echo "=========================================="
+
+            git tag -l 'Release*' \
+              | grep -E '^Release[0-9]+([.][0-9]+)*$' \
+              | sort -V \
+              || true
+
+            echo
+            echo "=========================================="
+            echo "Finding latest stable release"
+            echo "=========================================="
 
             LATEST_RELEASE=$(
               git tag -l 'Release*' \
-              | grep -E '^Release[0-9]+([.][0-9]+)*$' \
-              | sort -V \
-              | tail -n 1
+                | grep -E '^Release[0-9]+([.][0-9]+)*$' \
+                | sort -V \
+                | tail -n 1 \
+                || true
             )
 
             if [ -z "$LATEST_RELEASE" ]; then
-              echo "ERROR: No official Release tag found."
+              echo "ERROR: No official SmartDNS Release tag found."
               exit 1
             fi
 
             echo "Latest official release: $LATEST_RELEASE"
 
+            echo
+            echo "=========================================="
+            echo "Checking out official stable release"
+            echo "=========================================="
+
             git checkout --force "$LATEST_RELEASE"
 
             BUILD_LABEL="$LATEST_RELEASE"
+            SOURCE_REF="$LATEST_RELEASE"
             SOURCE_DESCRIPTION="Official Stable Release $LATEST_RELEASE"
 
           elif [ "$BUILD_TYPE" = "nightly" ]; then
 
-            # workflow 本身从 master 运行时，
-            # 当前 checkout 就是当前 fork master。
+            echo
+            echo "=========================================="
+            echo "Using Fork master as Nightly source"
+            echo "=========================================="
+
             #
-            # 明确记录当前 HEAD，不切换到 Release tag。
+            # Nightly 使用你 Fork 当前 master。
+            #
+            # workflow_dispatch 在 master 上运行时，
+            # actions/checkout 已经 checkout 当前 master HEAD，
+            # 所以这里不再切换 tag。
+            #
 
             BUILD_LABEL="nightly"
-            SOURCE_DESCRIPTION="Nightly build from master"
+            SOURCE_REF="master"
+            SOURCE_DESCRIPTION="Nightly build from Fork master"
 
           else
 
@@ -111,11 +163,18 @@ jobs:
           GIT_COMMIT="$(git rev-parse --short=7 HEAD)"
           GIT_COMMIT_FULL="$(git rev-parse HEAD)"
 
-          if [ "$BUILD_TYPE" = "stable" ]; then
-            SOURCE_REF="$LATEST_RELEASE"
-          else
-            SOURCE_REF="master"
-          fi
+          echo
+          echo "=========================================="
+          echo "Selected SmartDNS Source"
+          echo "=========================================="
+          echo "Build Type      : $BUILD_TYPE"
+          echo "Build Label     : $BUILD_LABEL"
+          echo "Source          : $SOURCE_DESCRIPTION"
+          echo "Source Ref      : $SOURCE_REF"
+          echo "Package Version : $PACKAGE_VERSION"
+          echo "Git Commit      : $GIT_COMMIT"
+          echo "Full Commit     : $GIT_COMMIT_FULL"
+          echo "=========================================="
 
           echo "BUILD_TYPE=$BUILD_TYPE" >> "$GITHUB_ENV"
           echo "BUILD_LABEL=$BUILD_LABEL" >> "$GITHUB_ENV"
@@ -129,18 +188,6 @@ jobs:
           echo "build_label=$BUILD_LABEL" >> "$GITHUB_OUTPUT"
           echo "package_version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
           echo "git_commit=$GIT_COMMIT" >> "$GITHUB_OUTPUT"
-
-          echo
-          echo "=========================================="
-          echo "SmartDNS Source Information"
-          echo "=========================================="
-          echo "Build Type      : $BUILD_TYPE"
-          echo "Build Label     : $BUILD_LABEL"
-          echo "Source          : $SOURCE_DESCRIPTION"
-          echo "Source Ref      : $SOURCE_REF"
-          echo "Package Version : $PACKAGE_VERSION"
-          echo "Git Commit      : $GIT_COMMIT"
-          echo "=========================================="
 
       # ------------------------------------------------------------
       # 3. Node.js
